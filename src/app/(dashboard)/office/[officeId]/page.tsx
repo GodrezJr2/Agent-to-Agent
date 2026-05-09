@@ -12,12 +12,19 @@ function AddAgentModal({ officeId, onClose, onCreated }: { officeId: string; onC
   const [role, setRole] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [comboId, setComboId] = useState("");
+  const [directModel, setDirectModel] = useState("");
   const [combos, setCombos] = useState<any[]>([]);
+  const [models, setModels] = useState<any[]>([]);
+  const [mode, setMode] = useState<"combo" | "direct">("combo");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     fetch("/api/combos").then(r => r.json()).then(d => setCombos(d.combos || [])).catch(() => {});
+    fetch("/api/v1/models").then(r => r.json()).then(d => {
+      const list = d.data || d.models || [];
+      setModels(list);
+    }).catch(() => {});
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -26,10 +33,17 @@ function AddAgentModal({ officeId, onClose, onCreated }: { officeId: string; onC
     setSubmitting(true);
     setError("");
     try {
+      const body: any = {
+        name: name.trim(),
+        role: role.trim() || null,
+        systemPrompt: systemPrompt.trim() || null,
+      };
+      if (mode === "combo" && comboId) body.comboId = comboId;
+      if (mode === "direct" && directModel) body.comboId = null; // Direct model overrides combo
       const res = await fetch(`/api/offices/${officeId}/agents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), role: role.trim() || null, comboId: comboId || null, systemPrompt: systemPrompt.trim() || null }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) { setError("Failed to create agent"); return; }
       onCreated();
@@ -51,12 +65,38 @@ function AddAgentModal({ officeId, onClose, onCreated }: { officeId: string; onC
             <label className="text-gray-400 text-xs">Role</label>
             <input value={role} onChange={e => setRole(e.target.value)} className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-green-500 outline-none" placeholder="Market Analyst" />
           </div>
+
+          {/* Model selection mode toggle */}
           <div>
-            <label className="text-gray-400 text-xs">Model Combo</label>
-            <select value={comboId} onChange={e => setComboId(e.target.value)} className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-green-500 outline-none">
-              <option value="">No combo (placeholder responses)</option>
-              {combos.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <label className="text-gray-400 text-xs mb-1 block">LLM Model</label>
+            <div className="flex gap-1 mb-2">
+              <button type="button" onClick={() => setMode("combo")}
+                className={`flex-1 px-2 py-1 text-xs rounded ${mode === "combo" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400"}`}>
+                Combo
+              </button>
+              <button type="button" onClick={() => setMode("direct")}
+                className={`flex-1 px-2 py-1 text-xs rounded ${mode === "direct" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400"}`}>
+                Pick Model
+              </button>
+            </div>
+
+            {mode === "combo" ? (
+              <select value={comboId} onChange={e => setComboId(e.target.value)}
+                className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-green-500 outline-none">
+                <option value="">Use first available combo</option>
+                {combos.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            ) : (
+              <select value={directModel} onChange={e => setDirectModel(e.target.value)}
+                className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-green-500 outline-none">
+                <option value="">Use default (OpenRouter Gemini Flash)</option>
+                {models.map((m: any) => {
+                  const id = m.id || m.model || m;
+                  const name = typeof m === "string" ? m : (m.name || id);
+                  return <option key={id} value={id}>{name}</option>;
+                })}
+              </select>
+            )}
           </div>
           <div>
             <label className="text-gray-400 text-xs">System Prompt</label>
