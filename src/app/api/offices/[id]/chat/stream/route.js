@@ -1,6 +1,78 @@
-import { getActiveAgentsByOffice, createMessage } from "@/lib/db";
+import { getActiveAgentsByOffice, createMessage, getComboById } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
+
+const PORT = process.env.PORT || 20128;
+const BASE_URL = `http://localhost:${PORT}`;
+
+async function callAgentLLM(agent, userContent, officeId) {
+  // Resolve combo → model
+  let model = "openrouter/google/gemini-2.5-flash";
+  if (agent.comboId) {
+    const combo = await getComboById(agent.comboId);
+    if (combo?.models) {
+      try {
+        const models = typeof combo.models === "string" ? JSON.parse(combo.models) : combo.models;
+        if (Array.isArray(models) && models.length > 0) {
+          const first = models[0];
+          model = first.model || first;
+        }
+      } catch {}
+    }
+  }
+
+  // Build messages
+  const messages = [];
+  if (agent.systemPrompt) {
+    messages.push({ role: "system", content: agent.systemPrompt });
+  }
+  messages.push({ role: "user", content: userContent });
+
+  // Call 9Router's own chat API (uses provider routing, token saving, etc.)
+  const res = await fetch(`${BASE_URL}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages,
+      stream: true,
+      max_tokens: 2048,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "Unknown error");
+    throw new Error(`LLM call failed (${res.status}): ${errText.slice(0, 200)}`);
+  }
+
+  // Read SSE stream from 9Router
+  let fullContent = "";
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        const data = line.slice(6).trim();
+        if (data === "[DONE]") continue;
+        try {
+          const parsed = JSON.parse(data);
+          const delta = parsed.choices?.[0]?.delta?.content || "";
+          if (delta) fullContent += delta;
+        } catch {}
+      }
+    }
+  }
+
+  return fullContent;
+}
 
 export async function GET(request, { params }) {
   const { id: officeId } = await params;
@@ -17,16 +89,22 @@ export async function GET(request, { params }) {
       try {
         const agents = await getActiveAgentsByOffice(officeId);
 
+        if (agents.length === 0 && userContent) {
+          send({ type: "all_done", message: "No agents to respond" });
+          controller.close();
+          return;
+        }
+
         const promises = agents.map(async (agent) => {
           send({ type: "agent_start", agentId: agent.id, agentName: agent.name });
           try {
-            // TODO: integrate with 9Router's chatCore.js pipeline in Task 14
-            const responseContent = `[${agent.name}] Response placeholder for: "${userContent.slice(0, 80)}..."`;
+            const responseContent = await callAgentLLM(agent, userContent, officeId);
             await createMessage({ officeId, agentId: agent.id, role: "agent", content: responseContent });
             send({ type: "agent_chunk", agentId: agent.id, delta: responseContent, fullResponse: responseContent });
             send({ type: "agent_done", agentId: agent.id, fullResponse: responseContent });
           } catch (err) {
             send({ type: "agent_error", agentId: agent.id, error: err.message });
+            await createMessage({ officeId, agentId: agent.id, role: "system", content: `Error: ${err.message}` });
           }
         });
 
