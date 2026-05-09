@@ -1,28 +1,50 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { startGameLoop } from "../engine/gameLoop";
 import { useOfficeStore } from "../engine/officeStore";
+
+const TILE = 32;
+const CHAR_W = 16;
+const CHAR_H = 24;
+const SPRITE_URLS = [
+  "/assets/characters/char_0.png",
+  "/assets/characters/char_1.png",
+  "/assets/characters/char_2.png",
+  "/assets/characters/char_3.png",
+  "/assets/characters/char_4.png",
+  "/assets/characters/char_5.png",
+];
 
 export function OfficeCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const characters = useOfficeStore((s) => s.characters);
-  const layout = useOfficeStore((s) => s.layout);
   const update = useOfficeStore((s) => s.update);
+  const [sprites, setSprites] = useState<HTMLImageElement[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  // Load character sprites
+  useEffect(() => {
+    const imgs = SPRITE_URLS.map((url) => {
+      const img = new Image();
+      img.src = url;
+      return img;
+    });
+    Promise.all(imgs.map((img) => new Promise<void>((resolve) => { img.onload = () => resolve(); img.onerror = () => resolve(); })))
+      .then(() => { setSprites(imgs); setLoaded(true); });
+  }, []);
 
   const handleResize = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
-
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
     canvas.style.width = `${rect.width}px`;
     canvas.style.height = `${rect.height}px`;
-
     const ctx = canvas.getContext("2d");
     if (ctx) ctx.scale(dpr, dpr);
   }, []);
@@ -45,73 +67,147 @@ export function OfficeCanvas() {
         const w = rect.width;
         const h = rect.height;
 
-        // Background
-        ctx.fillStyle = "#1a1a2e";
+        // Dark background
+        ctx.fillStyle = "#0f0f1a";
         ctx.fillRect(0, 0, w, h);
 
-        // Grid floor
-        ctx.strokeStyle = "rgba(255,255,255,0.03)";
-        const tileSize = 32;
-        for (let x = 0; x < w; x += tileSize) {
+        // Wall border
+        const ox = 80;
+        const oy = 40;
+        const cols = 10;
+        const rows = 6;
+        const gridW = cols * TILE;
+        const gridH = rows * TILE;
+        const gx = ox;
+        const gy = oy;
+
+        // Floor
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const bright = ((r + c) % 2 === 0) ? "#1a1a2e" : "#16162a";
+            ctx.fillStyle = bright;
+            ctx.fillRect(gx + c * TILE, gy + r * TILE, TILE, TILE);
+          }
+        }
+
+        // Grid lines
+        ctx.strokeStyle = "rgba(255,255,255,0.04)";
+        ctx.lineWidth = 0.5;
+        for (let r = 0; r <= rows; r++) {
           ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, h);
+          ctx.moveTo(gx, gy + r * TILE);
+          ctx.lineTo(gx + gridW, gy + r * TILE);
           ctx.stroke();
         }
-        for (let y = 0; y < h; y += tileSize) {
+        for (let c = 0; c <= cols; c++) {
           ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(w, y);
+          ctx.moveTo(gx + c * TILE, gy);
+          ctx.lineTo(gx + c * TILE, gy + gridH);
           ctx.stroke();
         }
 
-        // Draw characters as pixel sprites
+        // Walls (top and side borders, 2-tile thick)
+        ctx.fillStyle = "#2a2a3e";
+        // Top wall
+        ctx.fillRect(gx - TILE, gy - TILE * 2, gridW + TILE * 2, TILE * 2);
+        // Bottom wall
+        ctx.fillRect(gx - TILE, gy + gridH, gridW + TILE * 2, TILE);
+        // Left wall
+        ctx.fillRect(gx - TILE * 2, gy - TILE, TILE * 2, gridH + TILE);
+        // Right wall
+        ctx.fillRect(gx + gridW, gy - TILE, TILE * 2, gridH + TILE);
+
+        // Wall detail lines
+        ctx.strokeStyle = "rgba(255,255,255,0.06)";
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(gx - TILE * 2, gy - TILE * 2, gridW + TILE * 4, gridH + TILE * 3);
+
+        // Desk positions
+        const deskPositions = [
+          { x: gx + TILE * 2, y: gy + TILE },
+          { x: gx + TILE * 5, y: gy + TILE },
+          { x: gx + TILE * 8, y: gy + TILE },
+          { x: gx + TILE * 2, y: gy + TILE * 3 },
+          { x: gx + TILE * 5, y: gy + TILE * 3 },
+          { x: gx + TILE * 8, y: gy + TILE * 3 },
+        ];
+
+        // Draw characters at desk positions
         const chars = Array.from(state.characters.values());
         chars.forEach((char, i) => {
-          const cx = 100 + i * 64;
-          const cy = h / 2 - 16;
+          const pos = deskPositions[i % deskPositions.length];
+          if (!pos) return;
+          const cx = pos.x + 8;
+          const cy = pos.y - 2;
 
-          // Body
-          ctx.fillStyle = char.active ? "#4ade80" : "#60a5fa";
-          ctx.fillRect(cx, cy, 16, 24);
+          // Desk
+          ctx.fillStyle = "#3a3028";
+          ctx.fillRect(pos.x - 4, pos.y + CHAR_H, TILE + 8, 4);
+          ctx.fillStyle = "#4a4038";
+          ctx.fillRect(pos.x - 2, pos.y + CHAR_H - 2, TILE + 4, 2);
 
-          // Head
-          ctx.fillStyle = "#fbbf24";
-          ctx.fillRect(cx + 4, cy - 8, 8, 8);
+          // Legs
+          ctx.fillStyle = "#2a2018";
+          ctx.fillRect(pos.x, pos.y + CHAR_H + 4, 2, 6);
+          ctx.fillRect(pos.x + TILE, pos.y + CHAR_H + 4, 2, 6);
 
-          // Eyes
-          ctx.fillStyle = "#000";
-          ctx.fillRect(cx + 6, cy - 5, 2, 2);
-          ctx.fillRect(cx + 12, cy - 5, 2, 2);
+          // Chair
+          ctx.fillStyle = "#5a5048";
+          ctx.fillRect(cx - 6, cy + CHAR_H + 4, 12, 3);
+
+          // Draw character sprite or fallback
+          const spriteIdx = i % sprites.length;
+          const sprite = sprites[spriteIdx];
+
+          if (sprite && sprite.complete && sprite.naturalWidth > 0) {
+            // Draw sprite pixelated
+            ctx.imageSmoothingEnabled = false;
+            // Idle animation: slight bob
+            const bob = Math.sin(Date.now() / 800 + i) * 1;
+            ctx.drawImage(sprite, cx - 8, cy + bob, CHAR_W, CHAR_H);
+            ctx.imageSmoothingEnabled = true;
+          } else {
+            // Fallback: colored character shape
+            const colors = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6", "#1abc9c"];
+            ctx.fillStyle = colors[i % colors.length];
+            ctx.fillRect(cx - 6, cy, 12, 20);
+            ctx.fillStyle = "#fff";
+            ctx.fillRect(cx - 3, cy + 4, 3, 3);
+            ctx.fillRect(cx + 1, cy + 4, 3, 3);
+          }
 
           // Name label
           ctx.fillStyle = "#fff";
-          ctx.font = "8px monospace";
+          ctx.font = "7px monospace";
           ctx.textAlign = "center";
-          ctx.fillText(char.name, cx + 8, cy + 36);
+          ctx.fillText(char.name, cx, cy + CHAR_H + 14);
 
-          // Thinking indicator
+          // Active indicator
           if (char.active) {
-            const t = Date.now() / 500;
-            ctx.fillStyle = "#fff";
-            ctx.font = `${10 + Math.sin(t) * 2}px monospace`;
-            ctx.fillText("...", cx + 8, cy - 14);
+            const t = Date.now() / 300;
+            ctx.fillStyle = `rgba(74, 222, 128, ${0.5 + Math.sin(t) * 0.3})`;
+            ctx.font = "8px monospace";
+            ctx.fillText("●", cx, cy - 6);
           }
         });
 
         // Empty state
         if (chars.length === 0) {
-          ctx.fillStyle = "rgba(255,255,255,0.1)";
-          ctx.font = "14px monospace";
+          ctx.fillStyle = "rgba(255,255,255,0.15)";
+          ctx.font = "13px monospace";
           ctx.textAlign = "center";
-          ctx.fillText("No agents in this office", w / 2, h / 2 - 10);
-          ctx.fillText("Click '+ Add Agent' to get started", w / 2, h / 2 + 12);
+          const midX = gx + gridW / 2;
+          const midY = gy + gridH / 2;
+          ctx.fillText("No agents in this office", midX, midY - 8);
+          ctx.font = "10px monospace";
+          ctx.fillStyle = "rgba(255,255,255,0.08)";
+          ctx.fillText("Click '+ Add Agent' to get started", midX, midY + 10);
         }
       },
     });
 
     return stop;
-  }, [update]);
+  }, [update, sprites, loaded]);
 
   return (
     <div ref={containerRef} className="w-full h-full relative bg-gray-900">
@@ -120,7 +216,6 @@ export function OfficeCanvas() {
         className="absolute inset-0"
         style={{ imageRendering: "pixelated" }}
       />
-      {/* Agent count overlay */}
       <div className="absolute bottom-2 left-2 text-xs text-gray-500 bg-gray-900/80 px-2 py-1 rounded">
         {characters.size} agents
       </div>
