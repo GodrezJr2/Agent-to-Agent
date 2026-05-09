@@ -28,8 +28,15 @@ export interface OfficeStoreState {
   update: (dt: number) => void;
 }
 
+const defaultLayout = {
+  cols: 16,
+  rows: 10,
+  tiles: Array(160).fill(1),
+  furniture: [],
+};
+
 export const useOfficeStore = create<OfficeStoreState>((set, get) => ({
-  layout: null,
+  layout: defaultLayout,
   characters: new Map(),
   activeToolIds: new Map(),
 
