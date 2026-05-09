@@ -93,6 +93,100 @@ export const TABLES = {
     },
     indexes: ["CREATE INDEX IF NOT EXISTS idx_combo_name ON combos(name)"],
   },
+  offices: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      name: "TEXT NOT NULL",
+      description: "TEXT",
+      createdAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+    },
+  },
+  officeAgents: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      officeId: "TEXT NOT NULL",
+      name: "TEXT NOT NULL",
+      role: "TEXT",
+      comboId: "TEXT",
+      systemPrompt: "TEXT",
+      characterSprite: "TEXT DEFAULT 'default'",
+      seatX: "INTEGER DEFAULT 0",
+      seatY: "INTEGER DEFAULT 0",
+      isActive: "INTEGER DEFAULT 1",
+      createdAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_oa_office ON officeAgents(officeId)",
+      "CREATE INDEX IF NOT EXISTS idx_oa_active ON officeAgents(officeId, isActive)",
+    ],
+  },
+  chatMessages: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      officeId: "TEXT NOT NULL",
+      agentId: "TEXT",
+      role: "TEXT NOT NULL",
+      content: "TEXT NOT NULL",
+      createdAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_cm_office ON chatMessages(officeId, createdAt DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_cm_agent ON chatMessages(agentId, createdAt DESC)",
+    ],
+  },
+  cronJobs: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      agentId: "TEXT NOT NULL",
+      officeId: "TEXT NOT NULL",
+      schedule: "TEXT NOT NULL",
+      prompt: "TEXT NOT NULL",
+      enabled: "INTEGER DEFAULT 1",
+      lastRun: "TEXT",
+      nextRun: "TEXT",
+      createdAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_cj_agent ON cronJobs(agentId)",
+      "CREATE INDEX IF NOT EXISTS idx_cj_office ON cronJobs(officeId)",
+      "CREATE INDEX IF NOT EXISTS idx_cj_next ON cronJobs(nextRun)",
+    ],
+  },
+  memoryEntries: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      agentId: "TEXT",
+      officeId: "TEXT NOT NULL",
+      type: "TEXT NOT NULL DEFAULT 'note'",
+      content: "TEXT NOT NULL",
+      embedding: "TEXT",
+      createdAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_me_agent ON memoryEntries(agentId)",
+      "CREATE INDEX IF NOT EXISTS idx_me_office ON memoryEntries(officeId)",
+    ],
+  },
+  a2aMessages: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      fromAgentId: "TEXT NOT NULL",
+      toAgentId: "TEXT",
+      officeId: "TEXT NOT NULL",
+      type: "TEXT NOT NULL DEFAULT 'message'",
+      content: "TEXT NOT NULL",
+      createdAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_a2a_from ON a2aMessages(fromAgentId, createdAt DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_a2a_to ON a2aMessages(toAgentId, createdAt DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_a2a_office ON a2aMessages(officeId, createdAt DESC)",
+    ],
+  },
   kv: {
     columns: {
       scope: "TEXT NOT NULL",
