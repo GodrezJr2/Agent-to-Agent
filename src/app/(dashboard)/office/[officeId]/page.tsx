@@ -131,10 +131,20 @@ export default function OfficePage() {
     try {
       const res = await fetch(`/api/offices/${officeId}/agents`);
       const data = await res.json();
-      setAgents(data.agents || []);
-      // Clear store and re-add
-      agents.forEach((a: any) => removeAgent(a.id));
-      (data.agents || []).forEach((a: any) => addAgent(a));
+      const newList = data.agents || [];
+      setAgents(newList);
+
+      // Remove agents no longer present, add new ones
+      const currentIds = new Set(useOfficeStore.getState().characters.keys());
+      const newIds = new Set(newList.map((a: any) => a.id));
+
+      // Remove stale agents
+      currentIds.forEach((id) => {
+        if (!newIds.has(id)) removeAgent(id);
+      });
+
+      // Add new agents
+      newList.forEach((a: any) => addAgent(a));
     } catch {}
   }
 
@@ -177,8 +187,10 @@ export default function OfficePage() {
   }, [officeId]);
 
   useEffect(() => {
-    return () => { agents.forEach((a) => removeAgent(a.id)); };
-  }, [agents, removeAgent]);
+    return () => {
+      useOfficeStore.getState().characters.forEach((_, id) => removeAgent(id));
+    };
+  }, [removeAgent]);
 
   const handleAgentActivity = useCallback((agentId: string, active: boolean) => {
     if (active) setAgentActive(agentId, "chat");
