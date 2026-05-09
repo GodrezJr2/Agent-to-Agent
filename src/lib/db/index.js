@@ -67,6 +67,13 @@ export {
   saveRequestDetail, getRequestDetails, getRequestDetailById,
 } from "./repos/requestDetailsRepo.js";
 
+export * from "./repos/officesRepo.js";
+export * from "./repos/agentsRepo.js";
+export * from "./repos/chatRepo.js";
+export * from "./repos/cronJobsRepo.js";
+export * from "./repos/memoryRepo.js";
+export * from "./repos/a2aRepo.js";
+
 // Export/import full DB
 export async function exportDb() {
   const db = await getAdapter();
