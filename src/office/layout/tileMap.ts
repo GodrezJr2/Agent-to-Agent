@@ -1,4 +1,4 @@
-import { TileType } from '../types.js';
+import { TileType } from '../types';
 
 /** Check if a tile is walkable (floor, carpet, or doorway, and not blocked by furniture) */
 export function isWalkable(

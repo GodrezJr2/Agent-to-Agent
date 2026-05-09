@@ -1,4 +1,4 @@
-import type { SpriteData } from '../types.js';
+import type { SpriteData } from '../types';
 
 const zoomCaches = new Map<number, WeakMap<SpriteData, HTMLCanvasElement>>();
 

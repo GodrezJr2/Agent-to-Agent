@@ -1,4 +1,4 @@
-import type { ColorValue } from '../../components/ui/types.js';
+import type { ColorValue } from '../../components/ui/types';
 import {
   BUBBLE_FADE_DURATION_SEC,
   BUBBLE_SITTING_OFFSET_PX,
@@ -32,25 +32,25 @@ import {
   SELECTION_HIGHLIGHT_COLOR,
   VOID_TILE_DASH_PATTERN,
   VOID_TILE_OUTLINE_COLOR,
-} from '../../constants.js';
-import { getColorizedFloorSprite, hasFloorSprites, WALL_COLOR } from '../floorTiles.js';
-import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache.js';
+} from '../constants';
+import { getColorizedFloorSprite, hasFloorSprites, WALL_COLOR } from '../floorTiles';
+import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache';
 import {
   BUBBLE_PERMISSION_SPRITE,
   BUBBLE_WAITING_SPRITE,
   getCharacterSprites,
-} from '../sprites/spriteData.js';
+} from '../sprites/spriteData';
 import type {
   Character,
   FurnitureInstance,
   Seat,
   SpriteData,
   TileType as TileTypeVal,
-} from '../types.js';
-import { CharacterState, TILE_SIZE, TileType } from '../types.js';
-import { getWallInstances, hasWallSprites, wallColorToHex } from '../wallTiles.js';
-import { getCharacterSprite } from './characters.js';
-import { renderMatrixEffect } from './matrixEffect.js';
+} from '../types';
+import { CharacterState, TILE_SIZE, TileType } from '../types';
+import { getWallInstances, hasWallSprites, wallColorToHex } from '../wallTiles';
+import { getCharacterSprite } from './characters';
+import { renderMatrixEffect } from './matrixEffect';
 
 // ── Render functions ────────────────────────────────────────────
 

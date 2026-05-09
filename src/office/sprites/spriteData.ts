@@ -1,8 +1,8 @@
-import type { ColorValue } from '../../components/ui/types.js';
-import { PALETTE_COUNT } from '../../constants.js';
-import { adjustSprite } from '../colorize.js';
-import type { Direction, SpriteData } from '../types.js';
-import { Direction as Dir } from '../types.js';
+import type { ColorValue } from '../../components/ui/types';
+import { PALETTE_COUNT } from '../constants';
+import { adjustSprite } from '../colorize';
+import type { Direction, SpriteData } from '../types';
+import { Direction as Dir } from '../types';
 import bubblePermissionData from './bubble-permission.json';
 import bubbleWaitingData from './bubble-waiting.json';
 

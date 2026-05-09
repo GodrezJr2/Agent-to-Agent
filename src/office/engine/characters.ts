@@ -8,11 +8,11 @@ import {
   WANDER_MOVES_BEFORE_REST_MIN,
   WANDER_PAUSE_MAX_SEC,
   WANDER_PAUSE_MIN_SEC,
-} from '../../constants.js';
-import { findPath } from '../layout/tileMap.js';
-import type { CharacterSprites } from '../sprites/spriteData.js';
-import type { Character, Seat, SpriteData, TileType as TileTypeVal } from '../types.js';
-import { CharacterState, Direction, TILE_SIZE } from '../types.js';
+} from '../constants';
+import { findPath } from '../layout/tileMap';
+import type { CharacterSprites } from '../sprites/spriteData';
+import type { Character, Seat, SpriteData, TileType as TileTypeVal } from '../types';
+import { CharacterState, Direction, TILE_SIZE } from '../types';
 
 /** Tools that show reading animation instead of typing */
 const READING_TOOLS = new Set(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch']);

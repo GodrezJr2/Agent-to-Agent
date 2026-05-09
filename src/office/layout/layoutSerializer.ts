@@ -1,14 +1,14 @@
-import type { ColorValue } from '../../components/ui/types.js';
-import { getColorizedSprite } from '../colorize.js';
+import type { ColorValue } from '../../components/ui/types';
+import { getColorizedSprite } from '../colorize';
 import type {
   FurnitureInstance,
   OfficeLayout,
   PlacedFurniture,
   Seat,
   TileType as TileTypeVal,
-} from '../types.js';
-import { DEFAULT_COLS, DEFAULT_ROWS, Direction, TILE_SIZE, TileType } from '../types.js';
-import { getCatalogEntry, getOrientationInGroup } from './furnitureCatalog.js';
+} from '../types';
+import { DEFAULT_COLS, DEFAULT_ROWS, Direction, TILE_SIZE, TileType } from '../types';
+import { getCatalogEntry, getOrientationInGroup } from './furnitureCatalog';
 
 /** Convert flat tile array from layout into 2D grid */
 export function layoutToTileMap(layout: OfficeLayout): TileTypeVal[][] {
