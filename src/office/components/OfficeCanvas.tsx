@@ -16,13 +16,17 @@ const SPRITE_URLS = [
   "/assets/characters/char_5.png",
 ];
 
-export function OfficeCanvas() {
+interface AgentHitArea { id: string; x: number; y: number; w: number; h: number; }
+
+export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const characters = useOfficeStore((s) => s.characters);
   const update = useOfficeStore((s) => s.update);
   const [sprites, setSprites] = useState<HTMLImageElement[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const hitAreasRef = useRef<AgentHitArea[]>([]);
+  const [hoveredAgent, setHoveredAgent] = useState<string | null>(null);
 
   // Load character sprites
   useEffect(() => {
@@ -134,11 +138,23 @@ export function OfficeCanvas() {
 
         // Draw characters at desk positions
         const chars = Array.from(state.characters.values());
+        const areas: AgentHitArea[] = [];
         chars.forEach((char, i) => {
           const pos = deskPositions[i % deskPositions.length];
           if (!pos) return;
           const cx = pos.x + 8;
           const cy = pos.y - 2;
+
+          // Track hit area (character + name label)
+          areas.push({ id: char.id, x: cx - 10, y: cy - 12, w: 20, h: CHAR_H + 30 });
+
+          // Highlight on hover
+          const isHovered = hoveredAgent === char.id;
+          if (isHovered) {
+            ctx.strokeStyle = "rgba(74,222,128,0.6)";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(cx - 12, cy - 14, 24, CHAR_H + 32);
+          }
 
           // Desk
           ctx.fillStyle = "#3a3028";
@@ -191,7 +207,7 @@ export function OfficeCanvas() {
           }
         });
 
-        // Empty state
+        hitAreasRef.current = areas;
         if (chars.length === 0) {
           ctx.fillStyle = "rgba(255,255,255,0.15)";
           ctx.font = "13px monospace";
@@ -207,7 +223,46 @@ export function OfficeCanvas() {
     });
 
     return stop;
-  }, [update, sprites, loaded]);
+  }, [update, sprites, loaded, hoveredAgent]);
+
+  // Click handler for agent selection
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleClick = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      for (const area of hitAreasRef.current) {
+        if (x >= area.x && x <= area.x + area.w && y >= area.y && y <= area.y + area.h) {
+          onAgentClick?.(area.id);
+          return;
+        }
+      }
+    };
+
+    const handleMove = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      let found: string | null = null;
+      for (const area of hitAreasRef.current) {
+        if (x >= area.x && x <= area.x + area.w && y >= area.y && y <= area.y + area.h) {
+          found = area.id; break;
+        }
+      }
+      setHoveredAgent(found);
+      canvas.style.cursor = found ? "pointer" : "default";
+    };
+
+    canvas.addEventListener("click", handleClick);
+    canvas.addEventListener("mousemove", handleMove);
+    return () => {
+      canvas.removeEventListener("click", handleClick);
+      canvas.removeEventListener("mousemove", handleMove);
+    };
+  }, [onAgentClick]);
 
   return (
     <div ref={containerRef} className="w-full h-full relative bg-gray-900">

@@ -113,6 +113,71 @@ function AddAgentModal({ officeId, onClose, onCreated }: { officeId: string; onC
   );
 }
 
+function EditAgentModal({ officeId, agent, onClose, onUpdated }: { officeId: string; agent: any; onClose: () => void; onUpdated: () => void }) {
+  const [name, setName] = useState(agent.name || "");
+  const [role, setRole] = useState(agent.role || "");
+  const [systemPrompt, setSystemPrompt] = useState(agent.systemPrompt || "");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) return setError("Name is required");
+    setSubmitting(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/offices/${officeId}/agents/${agent.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), role: role.trim() || null, systemPrompt: systemPrompt.trim() || null }),
+      });
+      if (!res.ok) { setError("Failed to update agent"); return; }
+      onUpdated();
+      onClose();
+    } catch { setError("Network error"); }
+    finally { setSubmitting(false); }
+  }
+
+  async function handleDelete() {
+    if (!confirm(`Delete "${agent.name}"?`)) return;
+    try {
+      await fetch(`/api/offices/${officeId}/agents/${agent.id}`, { method: "DELETE" });
+      onUpdated();
+      onClose();
+    } catch {}
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-white text-lg font-semibold">Edit Agent</h2>
+          <button onClick={handleDelete} className="text-red-400 text-xs hover:text-red-300">Delete</button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className="text-gray-400 text-xs">Name *</label>
+            <input value={name} onChange={e => setName(e.target.value)} className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-green-500 outline-none" autoFocus />
+          </div>
+          <div>
+            <label className="text-gray-400 text-xs">Role</label>
+            <input value={role} onChange={e => setRole(e.target.value)} className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-green-500 outline-none" />
+          </div>
+          <div>
+            <label className="text-gray-400 text-xs">System Prompt</label>
+            <textarea value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)} rows={3} className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-green-500 outline-none resize-none" />
+          </div>
+          {error && <p className="text-red-400 text-xs">{error}</p>}
+          <div className="flex gap-2 pt-2">
+            <button type="button" onClick={onClose} className="flex-1 px-4 py-2 bg-gray-800 text-gray-300 text-sm rounded hover:bg-gray-700">Cancel</button>
+            <button type="submit" disabled={submitting} className="flex-1 px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-500 disabled:opacity-50">{submitting ? "Saving..." : "Save"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function OfficePage() {
   const params = useParams();
   const router = useRouter();
@@ -122,6 +187,7 @@ export default function OfficePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<any>(null);
   const addAgent = useOfficeStore((s) => s.addAgent);
   const removeAgent = useOfficeStore((s) => s.removeAgent);
   const setAgentActive = useOfficeStore((s) => s.setAgentActive);
@@ -213,6 +279,7 @@ export default function OfficePage() {
   return (
     <div className="flex flex-col h-screen bg-gray-900">
       {showAddModal && <AddAgentModal officeId={officeId} onClose={() => setShowAddModal(false)} onCreated={loadAgents} />}
+      {editingAgent && <EditAgentModal officeId={officeId} agent={editingAgent} onClose={() => setEditingAgent(null)} onUpdated={loadAgents} />}
 
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
         <div className="flex items-center gap-3">
@@ -229,7 +296,7 @@ export default function OfficePage() {
 
       <div className="flex flex-1 overflow-hidden">
         <div className="flex-1 relative min-w-0">
-          <OfficeCanvas />
+          <OfficeCanvas onAgentClick={(id) => { const a = agents.find(x => x.id === id); if (a) setEditingAgent(a); }} />
         </div>
         <div className="w-80 flex-shrink-0 border-l border-gray-800">
           <ChatPanel officeId={officeId} agents={agents} onAgentActivity={handleAgentActivity} />
