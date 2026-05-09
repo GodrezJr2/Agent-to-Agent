@@ -225,22 +225,10 @@ export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string
     return stop;
   }, [update, sprites, loaded, hoveredAgent]);
 
-  // Click handler for agent selection
+  // Hover detection for highlight
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
-    const handleClick = (e: MouseEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      for (const area of hitAreasRef.current) {
-        if (x >= area.x && x <= area.x + area.w && y >= area.y && y <= area.y + area.h) {
-          onAgentClick?.(area.id);
-          return;
-        }
-      }
-    };
 
     const handleMove = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
@@ -256,10 +244,8 @@ export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string
       canvas.style.cursor = found ? "pointer" : "default";
     };
 
-    canvas.addEventListener("click", handleClick);
     canvas.addEventListener("mousemove", handleMove);
     return () => {
-      canvas.removeEventListener("click", handleClick);
       canvas.removeEventListener("mousemove", handleMove);
     };
   }, [onAgentClick]);
@@ -271,8 +257,17 @@ export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string
         className="absolute inset-0"
         style={{ imageRendering: "pixelated" }}
       />
-      <div className="absolute bottom-2 left-2 text-xs text-gray-500 bg-gray-900/80 px-2 py-1 rounded">
-        {characters.size} agents
+      <div className="absolute bottom-2 left-2 right-2 flex items-center gap-1.5 flex-wrap">
+        <span className="text-xs text-gray-500 bg-gray-900/80 px-2 py-1 rounded">{characters.size} agents</span>
+        {Array.from(characters.values()).map((char) => (
+          <button
+            key={char.id}
+            onClick={(e) => { e.stopPropagation(); onAgentClick?.(char.id); }}
+            className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-2 py-1 rounded cursor-pointer transition-colors"
+          >
+            {char.name}
+          </button>
+        ))}
       </div>
     </div>
   );
