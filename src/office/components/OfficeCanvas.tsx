@@ -7,16 +7,27 @@ import { useOfficeStore } from "../engine/officeStore";
 const TILE = 32;
 const CHAR_W = 16;
 const CHAR_H = 24;
-const SPRITE_URLS = [
-  "/assets/characters/char_0.png",
-  "/assets/characters/char_1.png",
-  "/assets/characters/char_2.png",
-  "/assets/characters/char_3.png",
-  "/assets/characters/char_4.png",
-  "/assets/characters/char_5.png",
-];
 
-interface AgentHitArea { id: string; x: number; y: number; w: number; h: number; }
+const CHAR_URLS = Array.from({ length: 6 }, (_, i) => `/assets/characters/char_${i}.png`);
+const FLOOR_URLS = Array.from({ length: 9 }, (_, i) => `/assets/floors/floor_${i}.png`);
+const FURNITURE_URLS: Record<string, string> = {
+  desk: "/assets/furniture/DESK/DESK_FRONT.png",
+  chair: "/assets/furniture/WOODEN_CHAIR/WOODEN_CHAIR_FRONT.png",
+  plant: "/assets/furniture/PLANT/PLANT.png",
+  pc: "/assets/furniture/PC/PC_FRONT_OFF.png",
+  coffee: "/assets/furniture/COFFEE/COFFEE.png",
+  clock: "/assets/furniture/CLOCK/CLOCK.png",
+  bookshelf: "/assets/furniture/BOOKSHELF/BOOKSHELF.png",
+};
+
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(img);
+    img.src = url;
+  });
+}
 
 export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -24,19 +35,22 @@ export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string
   const characters = useOfficeStore((s) => s.characters);
   const update = useOfficeStore((s) => s.update);
   const [sprites, setSprites] = useState<HTMLImageElement[]>([]);
+  const [floorTiles, setFloorTiles] = useState<HTMLImageElement[]>([]);
+  const [furniture, setFurniture] = useState<Record<string, HTMLImageElement>>({});
   const [loaded, setLoaded] = useState(false);
-  const hitAreasRef = useRef<AgentHitArea[]>([]);
-  const [hoveredAgent, setHoveredAgent] = useState<string | null>(null);
 
-  // Load character sprites
+  // Load all assets
   useEffect(() => {
-    const imgs = SPRITE_URLS.map((url) => {
-      const img = new Image();
-      img.src = url;
-      return img;
-    });
-    Promise.all(imgs.map((img) => new Promise<void>((resolve) => { img.onload = () => resolve(); img.onerror = () => resolve(); })))
-      .then(() => { setSprites(imgs); setLoaded(true); });
+    Promise.all([
+      Promise.all(CHAR_URLS.map(loadImage)).then(setSprites),
+      Promise.all(FLOOR_URLS.map(loadImage)).then(setFloorTiles),
+      Promise.all(
+        Object.entries(FURNITURE_URLS).map(async ([key, url]) => {
+          const img = await loadImage(url);
+          return [key, img] as const;
+        })
+      ).then((pairs) => setFurniture(Object.fromEntries(pairs))),
+    ]).then(() => setLoaded(true));
   }, []);
 
   const handleResize = useCallback(() => {
@@ -53,11 +67,7 @@ export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string
     if (ctx) ctx.scale(dpr, dpr);
   }, []);
 
-  useEffect(() => {
-    handleResize();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, [handleResize]);
+  useEffect(() => { handleResize(); window.addEventListener("resize", handleResize); return () => window.removeEventListener("resize", handleResize); }, [handleResize]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -71,200 +81,203 @@ export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string
         const w = rect.width;
         const h = rect.height;
 
-        // Dark background
-        ctx.fillStyle = "#0f0f1a";
+        ctx.imageSmoothingEnabled = false;
+
+        // Background
+        ctx.fillStyle = "#0d0d1a";
         ctx.fillRect(0, 0, w, h);
 
-        // Wall border
-        const ox = 80;
-        const oy = 40;
-        const cols = 10;
-        const rows = 6;
-        const gridW = cols * TILE;
-        const gridH = rows * TILE;
-        const gx = ox;
-        const gy = oy;
+        const cols = 12;
+        const rows = 8;
+        const gx = 48;
+        const gy = 32;
+        const floor = floorTiles[0];
 
-        // Floor
+        // Floor tiles
         for (let r = 0; r < rows; r++) {
           for (let c = 0; c < cols; c++) {
-            const bright = ((r + c) % 2 === 0) ? "#1a1a2e" : "#16162a";
-            ctx.fillStyle = bright;
-            ctx.fillRect(gx + c * TILE, gy + r * TILE, TILE, TILE);
+            const x = gx + c * TILE;
+            const y = gy + r * TILE;
+            if (floor && floor.complete && floor.naturalWidth > 0) {
+              ctx.drawImage(floor, x, y, TILE, TILE);
+            } else {
+              const shade = ((r + c) % 2 === 0) ? "#1a1a2e" : "#151528";
+              ctx.fillStyle = shade;
+              ctx.fillRect(x, y, TILE, TILE);
+            }
           }
         }
 
-        // Grid lines
-        ctx.strokeStyle = "rgba(255,255,255,0.04)";
-        ctx.lineWidth = 0.5;
-        for (let r = 0; r <= rows; r++) {
-          ctx.beginPath();
-          ctx.moveTo(gx, gy + r * TILE);
-          ctx.lineTo(gx + gridW, gy + r * TILE);
-          ctx.stroke();
-        }
-        for (let c = 0; c <= cols; c++) {
-          ctx.beginPath();
-          ctx.moveTo(gx + c * TILE, gy);
-          ctx.lineTo(gx + c * TILE, gy + gridH);
-          ctx.stroke();
-        }
-
-        // Walls (top and side borders, 2-tile thick)
-        ctx.fillStyle = "#2a2a3e";
+        // Draw walls (2-tile thick border)
+        const wallColor = "#2e2e42";
         // Top wall
-        ctx.fillRect(gx - TILE, gy - TILE * 2, gridW + TILE * 2, TILE * 2);
+        for (let c = -2; c < cols + 2; c++) {
+          for (let r = -2; r < 0; r++) {
+            const x = gx + c * TILE;
+            const y = gy + r * TILE;
+            // Wall checker pattern
+            const shade = ((c + r) % 2 === 0) ? wallColor : "#28283c";
+            ctx.fillStyle = shade;
+            ctx.fillRect(x, y, TILE, TILE);
+            // Brick lines
+            ctx.fillStyle = "rgba(0,0,0,0.2)";
+            ctx.fillRect(x, y + TILE - 1, TILE, 1);
+          }
+        }
+        // Side walls
+        for (let r = -2; r < rows + 1; r++) {
+          for (let side = 0; side < 2; side++) {
+            const sc = side === 0 ? -2 : cols;
+            for (let wc = 0; wc < 2; wc++) {
+              const x = gx + (sc + wc) * TILE;
+              const y = gy + r * TILE;
+              if (r < 0 || r >= rows) continue;
+              const shade = ((sc + wc + r) % 2 === 0) ? wallColor : "#28283c";
+              ctx.fillStyle = shade;
+              ctx.fillRect(x, y, TILE, TILE);
+              ctx.fillStyle = "rgba(0,0,0,0.2)";
+              ctx.fillRect(x + TILE - 1, y, 1, TILE);
+            }
+          }
+        }
         // Bottom wall
-        ctx.fillRect(gx - TILE, gy + gridH, gridW + TILE * 2, TILE);
-        // Left wall
-        ctx.fillRect(gx - TILE * 2, gy - TILE, TILE * 2, gridH + TILE);
-        // Right wall
-        ctx.fillRect(gx + gridW, gy - TILE, TILE * 2, gridH + TILE);
+        for (let c = -2; c < cols + 2; c++) {
+          for (let r = rows; r < rows + 1; r++) {
+            const x = gx + c * TILE;
+            const y = gy + r * TILE;
+            const shade = ((c + r) % 2 === 0) ? wallColor : "#28283c";
+            ctx.fillStyle = shade;
+            ctx.fillRect(x, y, TILE, TILE);
+          }
+        }
 
-        // Wall detail lines
+        // Wall top/side highlight
         ctx.strokeStyle = "rgba(255,255,255,0.06)";
-        ctx.lineWidth = 0.5;
-        ctx.strokeRect(gx - TILE * 2, gy - TILE * 2, gridW + TILE * 4, gridH + TILE * 3);
+        ctx.lineWidth = 1;
+        ctx.strokeRect(gx - TILE * 2, gy - TILE * 2, cols * TILE + TILE * 4, rows * TILE + TILE * 3);
 
         // Desk positions
         const deskPositions = [
-          { x: gx + TILE * 2, y: gy + TILE },
-          { x: gx + TILE * 5, y: gy + TILE },
-          { x: gx + TILE * 8, y: gy + TILE },
-          { x: gx + TILE * 2, y: gy + TILE * 3 },
-          { x: gx + TILE * 5, y: gy + TILE * 3 },
-          { x: gx + TILE * 8, y: gy + TILE * 3 },
+          { x: gx + TILE * 3, y: gy + TILE * 1 },
+          { x: gx + TILE * 7, y: gy + TILE * 1 },
+          { x: gx + TILE * 3, y: gy + TILE * 4 },
+          { x: gx + TILE * 7, y: gy + TILE * 4 },
         ];
 
-        // Draw characters at desk positions
+        const deskImg = furniture.desk;
+        const chairImg = furniture.chair;
+        const plantImg = furniture.plant;
+        const pcImg = furniture.pc;
+
         const chars = Array.from(state.characters.values());
-        const areas: AgentHitArea[] = [];
-        chars.forEach((char, i) => {
-          const pos = deskPositions[i % deskPositions.length];
-          if (!pos) return;
-          const cx = pos.x + 8;
-          const cy = pos.y - 2;
 
-          // Track hit area (character + name label)
-          areas.push({ id: char.id, x: cx - 10, y: cy - 12, w: 20, h: CHAR_H + 30 });
+        // Draw furniture at each desk position
+        deskPositions.forEach((pos, di) => {
+          const dx = pos.x;
+          const dy = pos.y;
 
-          // Highlight on hover
-          const isHovered = hoveredAgent === char.id;
-          if (isHovered) {
-            ctx.strokeStyle = "rgba(74,222,128,0.6)";
-            ctx.lineWidth = 1;
-            ctx.strokeRect(cx - 12, cy - 14, 24, CHAR_H + 32);
-          }
-
-          // Desk
-          ctx.fillStyle = "#3a3028";
-          ctx.fillRect(pos.x - 4, pos.y + CHAR_H, TILE + 8, 4);
-          ctx.fillStyle = "#4a4038";
-          ctx.fillRect(pos.x - 2, pos.y + CHAR_H - 2, TILE + 4, 2);
-
-          // Legs
-          ctx.fillStyle = "#2a2018";
-          ctx.fillRect(pos.x, pos.y + CHAR_H + 4, 2, 6);
-          ctx.fillRect(pos.x + TILE, pos.y + CHAR_H + 4, 2, 6);
-
-          // Chair
-          ctx.fillStyle = "#5a5048";
-          ctx.fillRect(cx - 6, cy + CHAR_H + 4, 12, 3);
-
-          // Draw character sprite or fallback
-          const spriteIdx = i % sprites.length;
-          const sprite = sprites[spriteIdx];
-
-          if (sprite && sprite.complete && sprite.naturalWidth > 0) {
-            // Draw sprite pixelated
-            ctx.imageSmoothingEnabled = false;
-            // Idle animation: slight bob
-            const bob = Math.sin(Date.now() / 800 + i) * 1;
-            ctx.drawImage(sprite, cx - 8, cy + bob, CHAR_W, CHAR_H);
-            ctx.imageSmoothingEnabled = true;
+          // Desk sprite
+          if (deskImg && deskImg.complete && deskImg.naturalWidth > 0) {
+            ctx.drawImage(deskImg, dx - 4, dy + 8, TILE + 8, TILE);
           } else {
-            // Fallback: colored character shape
-            const colors = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6", "#1abc9c"];
-            ctx.fillStyle = colors[i % colors.length];
-            ctx.fillRect(cx - 6, cy, 12, 20);
-            ctx.fillStyle = "#fff";
-            ctx.fillRect(cx - 3, cy + 4, 3, 3);
-            ctx.fillRect(cx + 1, cy + 4, 3, 3);
+            ctx.fillStyle = "#3a3028";
+            ctx.fillRect(dx - 4, dy + 8, TILE + 8, TILE);
+            ctx.fillStyle = "#4a4038";
+            ctx.fillRect(dx - 2, dy + 6, TILE + 4, 2);
+            // Legs
+            ctx.fillStyle = "#2a2018";
+            ctx.fillRect(dx, dy + 8 + TILE, 2, 6);
+            ctx.fillRect(dx + TILE, dy + 8 + TILE, 2, 6);
           }
 
-          // Name label
-          ctx.fillStyle = "#fff";
-          ctx.font = "7px monospace";
-          ctx.textAlign = "center";
-          ctx.fillText(char.name, cx, cy + CHAR_H + 14);
+          // PC on desk
+          if (pcImg && pcImg.complete && pcImg.naturalWidth > 0 && di % 2 === 0) {
+            ctx.drawImage(pcImg, dx + TILE / 2 - 8, dy + 2, 16, 16);
+          }
 
-          // Active indicator
-          if (char.active) {
-            const t = Date.now() / 300;
-            ctx.fillStyle = `rgba(74, 222, 128, ${0.5 + Math.sin(t) * 0.3})`;
-            ctx.font = "8px monospace";
-            ctx.fillText("●", cx, cy - 6);
+          // Agent at this desk
+          const char = chars[di];
+          if (char) {
+            const cx = dx + TILE / 2;
+            const cy = dy - 4;
+            const spriteIdx = di % sprites.length;
+            const sprite = sprites[spriteIdx];
+
+            // Chair behind character
+            if (chairImg && chairImg.complete && chairImg.naturalWidth > 0) {
+              ctx.drawImage(chairImg, cx - 8, cy + CHAR_H + 2, CHAR_W, 8);
+            } else {
+              ctx.fillStyle = "#5a5048";
+              ctx.fillRect(cx - 6, cy + CHAR_H + 2, 12, 4);
+            }
+
+            // Character sprite
+            if (sprite && sprite.complete && sprite.naturalWidth > 0) {
+              const bob = Math.sin(Date.now() / 800 + di) * 1;
+              ctx.drawImage(sprite, cx - 8, cy + bob, CHAR_W, CHAR_H);
+            } else {
+              const colors = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6", "#1abc9c"];
+              ctx.fillStyle = colors[di % colors.length];
+              ctx.fillRect(cx - 6, cy, 12, 20);
+              ctx.fillStyle = "#fff";
+              ctx.fillRect(cx - 3, cy + 4, 3, 3);
+              ctx.fillRect(cx + 1, cy + 4, 3, 3);
+            }
+
+            // Name
+            ctx.fillStyle = "#fff";
+            ctx.font = "7px monospace";
+            ctx.textAlign = "center";
+            ctx.fillText(char.name, cx, cy + CHAR_H + 14);
+
+            // Active dot
+            if (char.active) {
+              const t = Date.now() / 300;
+              ctx.fillStyle = `rgba(74, 222, 128, ${0.5 + Math.sin(t) * 0.3})`;
+              ctx.font = "8px monospace";
+              ctx.fillText("●", cx, cy - 6);
+            }
           }
         });
 
-        hitAreasRef.current = areas;
+        // Plants at corners
+        if (plantImg && plantImg.complete && plantImg.naturalWidth > 0) {
+          [
+            [gx + TILE, gy + TILE * 6],
+            [gx + TILE * 10, gy + TILE * 6],
+          ].forEach(([px, py]) => {
+            ctx.drawImage(plantImg, px - 4, py - 4, 20, 24);
+          });
+        }
+
+        // Empty state
         if (chars.length === 0) {
-          ctx.fillStyle = "rgba(255,255,255,0.15)";
+          ctx.fillStyle = "rgba(255,255,255,0.12)";
           ctx.font = "13px monospace";
           ctx.textAlign = "center";
-          const midX = gx + gridW / 2;
-          const midY = gy + gridH / 2;
-          ctx.fillText("No agents in this office", midX, midY - 8);
+          const mx = gx + (cols * TILE) / 2;
+          const my = gy + (rows * TILE) / 2;
+          ctx.fillText("No agents in this office", mx, my - 8);
           ctx.font = "10px monospace";
-          ctx.fillStyle = "rgba(255,255,255,0.08)";
-          ctx.fillText("Click '+ Add Agent' to get started", midX, midY + 10);
+          ctx.fillStyle = "rgba(255,255,255,0.07)";
+          ctx.fillText("Click '+ Add Agent' to get started", mx, my + 10);
         }
+
+        ctx.imageSmoothingEnabled = true;
       },
     });
 
     return stop;
-  }, [update, sprites, loaded, hoveredAgent]);
-
-  // Hover detection for highlight
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const handleMove = (e: MouseEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      let found: string | null = null;
-      for (const area of hitAreasRef.current) {
-        if (x >= area.x && x <= area.x + area.w && y >= area.y && y <= area.y + area.h) {
-          found = area.id; break;
-        }
-      }
-      setHoveredAgent(found);
-      canvas.style.cursor = found ? "pointer" : "default";
-    };
-
-    canvas.addEventListener("mousemove", handleMove);
-    return () => {
-      canvas.removeEventListener("mousemove", handleMove);
-    };
-  }, [onAgentClick]);
+  }, [update, sprites, floorTiles, furniture, loaded]);
 
   return (
     <div ref={containerRef} className="w-full h-full relative bg-gray-900">
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0"
-        style={{ imageRendering: "pixelated" }}
-      />
+      <canvas ref={canvasRef} className="absolute inset-0" style={{ imageRendering: "pixelated" }} />
       <div className="absolute bottom-2 left-2 right-2 flex items-center gap-1.5 flex-wrap">
         <span className="text-xs text-gray-500 bg-gray-900/80 px-2 py-1 rounded">{characters.size} agents</span>
         {Array.from(characters.values()).map((char) => (
-          <button
-            key={char.id}
-            onClick={(e) => { e.stopPropagation(); onAgentClick?.(char.id); }}
-            className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-2 py-1 rounded cursor-pointer transition-colors"
-          >
+          <button key={char.id} onClick={(e) => { e.stopPropagation(); onAgentClick?.(char.id); }}
+            className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-2 py-1 rounded cursor-pointer transition-colors">
             {char.name}
           </button>
         ))}
