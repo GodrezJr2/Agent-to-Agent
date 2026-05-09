@@ -1,4 +1,4 @@
-import { getActiveAgentsByOffice, createMessage, getComboById } from "@/lib/db";
+import { getActiveAgentsByOffice, createMessage, getComboById, getCombos } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -6,8 +6,10 @@ const PORT = process.env.PORT || 20128;
 const BASE_URL = `http://localhost:${PORT}`;
 
 async function callAgentLLM(agent, userContent, officeId) {
-  // Resolve combo → model
+  // Resolve model from agent's combo, or fall back to first available combo, or OpenRouter free model
   let model = "openrouter/google/gemini-2.5-flash";
+
+  // Try agent's combo first
   if (agent.comboId) {
     const combo = await getComboById(agent.comboId);
     if (combo?.models) {
@@ -19,6 +21,18 @@ async function callAgentLLM(agent, userContent, officeId) {
         }
       } catch {}
     }
+  } else {
+    // Fall back to first available combo
+    try {
+      const combos = await getCombos();
+      if (combos?.length > 0 && combos[0].models) {
+        const models = typeof combos[0].models === "string" ? JSON.parse(combos[0].models) : combos[0].models;
+        if (Array.isArray(models) && models.length > 0) {
+          const first = models[0];
+          model = first.model || first;
+        }
+      }
+    } catch {}
   }
 
   // Build messages
