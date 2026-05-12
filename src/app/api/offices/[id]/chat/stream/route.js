@@ -141,18 +141,11 @@ function buildHistoryMessages(history, currentAgent, allAgents) {
   return llmMessages;
 }
 
-// Detect if model likely supports thinking/reasoning tokens
-const THINKING_PATTERN = /r1|o1|o3|qwq|thinking|reasoning|claude-sonnet|claude-opus|gemini-2\.5-pro|nemotron-super|deepseek-reasoner/i;
-function supportsThinking(modelId) {
-  return THINKING_PATTERN.test(modelId);
-}
-
 // Single non-streaming LLM call — returns { content, toolCalls }
 async function llmCall(model, messages, useTools, thinkingBudget = 0) {
   const body = { model, messages, stream: false, max_tokens: 4096 };
   if (useTools) body.tools = AGENT_TOOLS;
-  // Only add thinking if model supports it AND budget > 0
-  if (thinkingBudget > 0 && supportsThinking(model)) {
+  if (thinkingBudget > 0) {
     body.thinking = { type: "enabled", budget_tokens: thinkingBudget };
   }
 
