@@ -3,6 +3,12 @@
  * Add new tools here — they auto-appear for all agents.
  */
 
+import { v4 as uuidv4 } from "uuid";
+import { getAdapter } from "./db/driver.js";
+import fs from "fs";
+import path from "path";
+import { exec } from "child_process";
+
 // ── Tool definitions (OpenAI function-calling schema) ────────────────────────
 export const AGENT_TOOLS = [
   {
@@ -314,10 +320,6 @@ async function toolWebSearch({ query }) {
 
   return `Could not fetch search results for "${query}". Consider setting BRAVE_SEARCH_API_KEY for reliable results.`;
 }
-
-import { v4 as uuidv4 } from "uuid";
-import { getAdapter } from "./db/driver.js";
-import { exec } from "child_process";
 
 // ── Workspace sandbox ──────────────────────────────────────────────────────
 async function getOfficeByIdSync(officeId) {
