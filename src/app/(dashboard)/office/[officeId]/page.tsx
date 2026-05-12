@@ -426,6 +426,8 @@ export default function OfficePage() {
   const [editingAgent, setEditingAgent] = useState<any>(null);
   const [editingName, setEditingName] = useState(false);
   const [showOrgPanel, setShowOrgPanel] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsWorkspace, setSettingsWorkspace] = useState("");
   const [nameInput, setNameInput] = useState("");
   const addAgent = useOfficeStore((s) => s.addAgent);
   const removeAgent = useOfficeStore((s) => s.removeAgent);
@@ -536,6 +538,30 @@ export default function OfficePage() {
     <div className="flex flex-col h-screen bg-gray-900">
       {showAddModal && <AddAgentModal officeId={officeId} onClose={() => setShowAddModal(false)} onCreated={loadAgents} />}
       {editingAgent && <EditAgentModal officeId={officeId} agent={editingAgent} allAgents={agents} onClose={() => setEditingAgent(null)} onUpdated={loadAgents} />}
+      {showSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowSettings(false)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+            <h2 className="text-white text-lg font-semibold mb-4">Office Settings</h2>
+            <div className="space-y-3">
+              <div>
+                <label className="text-gray-400 text-xs">Workspace Path</label>
+                <input defaultValue={office.workspacePath || ""} onChange={e => setSettingsWorkspace(e.target.value)}
+                  className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-blue-500 outline-none"
+                  placeholder="C:\Projects\my-app" />
+                <p className="text-gray-600 text-xs mt-1">Agents can read/write files and run commands in this folder.</p>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button onClick={() => setShowSettings(false)} className="flex-1 px-4 py-2 bg-gray-800 text-gray-300 text-sm rounded hover:bg-gray-700">Cancel</button>
+                <button onClick={async () => {
+                  await fetch(`/api/offices/${officeId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspacePath: settingsWorkspace || null }) });
+                  setOffice({ ...office, workspacePath: settingsWorkspace || null });
+                  setShowSettings(false);
+                }} className="flex-1 px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-500">Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
         <div className="flex items-center gap-3">
@@ -560,6 +586,13 @@ export default function OfficePage() {
             </h1>
           )}
           {office.description && <span className="text-gray-500 text-sm hidden sm:inline">{office.description}</span>}
+          <button
+            onClick={() => setShowSettings(true)}
+            className="text-gray-500 hover:text-gray-300 text-sm ml-1"
+            title="Office settings"
+          >
+            ⚙
+          </button>
         </div>
         <div className="flex items-center gap-2">
           <button
