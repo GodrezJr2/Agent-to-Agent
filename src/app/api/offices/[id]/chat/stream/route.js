@@ -163,10 +163,25 @@ async function llmCall(model, messages, useTools, thinkingBudget = 0) {
   const data = await res.json();
   const choice = data.choices?.[0];
   const msg = choice?.message || {};
+  const content = choice?.message?.content || "";
+
+  // Extract thinking from various response formats:
+  // - msg.reasoning_content (OpenAI std via 9Router translator)
+  // - msg.reasoning (DeepSeek R1 via OpenRouter)
+  // - msg.content[] with type=thinking (OpenCode/big-pickle)
+  let thinking = msg.reasoning_content || msg.reasoning || "";
+  if (!thinking && Array.isArray(msg.content)) {
+    thinking = msg.content
+      .filter((p) => p.type === "thinking")
+      .map((p) => p.thinking || "")
+      .join("\n");
+  }
+
   return {
-    content: msg.content || "",
-    // reasoning_content = OpenAI standard, reasoning = DeepSeek R1 via some providers
-    thinking: msg.reasoning_content || msg.reasoning || "",
+    content: typeof content === "string" ? content : (
+      Array.isArray(content) ? content.filter(p => p.type === "text").map(p => p.text).join("\n") : String(content)
+    ),
+    thinking,
     toolCalls: msg.tool_calls || [],
     finishReason: choice?.finish_reason || "stop",
     message: msg,
