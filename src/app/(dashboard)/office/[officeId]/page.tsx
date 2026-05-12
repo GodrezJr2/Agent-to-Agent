@@ -545,23 +545,17 @@ export default function OfficePage() {
             <div className="space-y-3">
               <div>
                 <label className="text-gray-400 text-xs">Workspace Path</label>
-                <div className="flex gap-2">
-                  <input defaultValue={office.workspacePath || ""} onChange={e => setSettingsWorkspace(e.target.value)}
-                    className="flex-1 bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-blue-500 outline-none"
-                    placeholder="C:\Projects\my-app" />
-                  <button onClick={async () => {
-                    try {
-                      const handle = await (window as any).showDirectoryPicker();
-                      setSettingsWorkspace(handle.name);
-                      const input = document.querySelector<HTMLInputElement>('[placeholder="C:\\Projects\\my-app"]');
-                      if (input) { input.value = handle.name; input.focus(); }
-                    } catch {}
-                  }}
-                    className="px-3 py-2 bg-gray-700 text-gray-300 text-xs rounded hover:bg-gray-600 whitespace-nowrap">
-                    Browse
-                  </button>
+                <input defaultValue={office.workspacePath || ""} onChange={e => setSettingsWorkspace(e.target.value)}
+                  className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-blue-500 outline-none"
+                  placeholder="C:\Projects\my-app" />
+                <div className="flex gap-1 mt-1 flex-wrap">
+                  {["C:\\Projects", "C:\\Users\\Administrator\\Desktop", "C:\\Users\\Administrator\\Documents"].map(p => (
+                    <button key={p} onClick={() => setSettingsWorkspace(p)} className="text-xs px-2 py-0.5 bg-gray-800 text-gray-400 rounded hover:bg-gray-700 hover:text-white transition-colors">
+                      {p.split("\\").pop()}
+                    </button>
+                  ))}
                 </div>
-                <p className="text-gray-600 text-xs mt-1">Agents can read/write files and run commands in this folder. No restrictions — any folder.</p>
+                <p className="text-gray-600 text-xs mt-1">Any folder — agents stay sandboxed inside. Quick buttons above, or type full path.</p>
               </div>
               <div className="flex gap-2 pt-2">
                 <button onClick={() => setShowSettings(false)} className="flex-1 px-4 py-2 bg-gray-800 text-gray-300 text-sm rounded hover:bg-gray-700">Cancel</button>
