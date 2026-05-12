@@ -43,7 +43,7 @@ async function resolveModel(agent) {
     console.warn(`[LLM][${agent.name}] failed to load combos:`, e.message);
   }
   // Last resort
-  const fallback = "oc/deepseek-v4-flash-free";
+  const fallback = "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free";
   console.warn(`[LLM][${agent.name}] no model configured — fallback: ${fallback}`);
   return fallback;
 }
