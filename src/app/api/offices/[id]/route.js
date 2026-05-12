@@ -21,14 +21,14 @@ export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { name, description } = body;
+    const { name, description, workspacePath } = body;
 
     const existing = await getOfficeById(id);
     if (!existing) {
       return NextResponse.json({ error: "Office not found" }, { status: 404 });
     }
 
-    const updated = await updateOffice(id, { name, description });
+    const updated = await updateOffice(id, { name, description, workspacePath });
     return NextResponse.json({ office: updated });
   } catch (error) {
     console.log("Error updating office:", error);
