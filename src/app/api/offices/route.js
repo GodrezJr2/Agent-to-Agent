@@ -18,13 +18,13 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { name, description } = body;
+    const { name, description, workspacePath } = body;
 
     if (!name) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
     }
 
-    const office = await createOffice({ name, description });
+    const office = await createOffice({ name, description, workspacePath });
     return NextResponse.json({ office }, { status: 201 });
   } catch (error) {
     console.log("Error creating office:", error);
