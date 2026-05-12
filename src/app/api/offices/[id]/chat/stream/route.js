@@ -165,7 +165,7 @@ async function llmCall(model, messages, useTools, thinkingBudget = 0) {
   const msg = choice?.message || {};
   return {
     content: msg.content || "",
-    thinking: msg.reasoning_content || msg.thinking || "",
+    thinking: msg.reasoning_content || msg.reasoning || msg.thinking || "",
     toolCalls: msg.tool_calls || [],
     finishReason: choice?.finish_reason || "stop",
     message: msg,
