@@ -43,6 +43,8 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
   const [loading, setLoading] = useState(true);
   // Agents showing "..." thinking dots
   const [thinkingAgents, setThinkingAgents] = useState<Set<string>>(new Set());
+  // Agent thinking/reasoning text (collapsible)
+  const [thoughtBubbles, setThoughtBubbles] = useState<Map<string, string>>(new Map());
   // Agents doing typewriter animation: agentId → { full text, cursor position }
   const [streaming, setStreaming] = useState<Map<string, StreamingState>>(new Map());
   // @mention autocomplete
@@ -188,6 +190,10 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
             next.delete(data.agentId);
             return next;
           });
+          // Capture thinking/reasoning if present
+          if (data.thinking) {
+            setThoughtBubbles((prev) => new Map(prev).set(data.agentId, data.thinking));
+          }
           const state: StreamingState = { full: data.fullResponse, cursor: 0 };
           streamingRef.current = new Map(streamingRef.current).set(data.agentId, state);
           setStreaming(new Map(streamingRef.current));
@@ -240,11 +246,8 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
 
         if (data.type === "all_done") {
           eventSource.close();
+          setThinkingAgents(new Set());
           setSending(false);
-          fetch(`/api/offices/${officeId}/chat?limit=100`)
-            .then((r) => r.json())
-            .then((d) => { if (d.messages) setMessages(d.messages); })
-            .catch(() => {});
         }
       };
 
@@ -342,6 +345,12 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
                   wordBreak: "break-word",
                   whiteSpace: "pre-wrap",
                 }}>
+                  {msg.agentId && thoughtBubbles.has(msg.agentId) && (
+                    <details style={{ marginBottom: 8, fontSize: 12, color: "#9ca3af", background: "#0f0f1a", borderRadius: 6, padding: "6px 10px" }}>
+                      <summary style={{ cursor: "pointer", fontWeight: 500, color: "#a78bfa" }}>Thinking...</summary>
+                      <div style={{ marginTop: 6, whiteSpace: "pre-wrap", color: "#9ca3af" }}>{thoughtBubbles.get(msg.agentId)}</div>
+                    </details>
+                  )}
                   {displayText}
                   {isTyping && (
                     <span style={{

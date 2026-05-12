@@ -145,6 +145,8 @@ function buildHistoryMessages(history, currentAgent, allAgents) {
 async function llmCall(model, messages, useTools) {
   const body = { model, messages, stream: false, max_tokens: 4096 };
   if (useTools) body.tools = AGENT_TOOLS;
+  // Enable thinking/reasoning for models that support it
+  body.thinking = { type: "enabled", budget_tokens: 4000 };
 
   const res = await fetch(`${BASE_URL}/v1/chat/completions`, {
     method: "POST",
@@ -159,11 +161,13 @@ async function llmCall(model, messages, useTools) {
 
   const data = await res.json();
   const choice = data.choices?.[0];
+  const msg = choice?.message || {};
   return {
-    content: choice?.message?.content || "",
-    toolCalls: choice?.message?.tool_calls || [],
+    content: msg.content || "",
+    thinking: msg.reasoning_content || msg.thinking || "",
+    toolCalls: msg.tool_calls || [],
     finishReason: choice?.finish_reason || "stop",
-    message: choice?.message,
+    message: msg,
   };
 }
 
@@ -181,46 +185,39 @@ async function callAgentLLM(agent, userContent, allAgents, history = [], officeI
   messages.push(...buildHistoryMessages(history, agent, allAgents));
   messages.push({ role: "user", content: userContent });
 
-  const toolLog = []; // track tool calls for transparency
+  const toolLog = [];
+  let allThinking = "";
   const MAX_ITERATIONS = 6;
 
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-    const { content, toolCalls, finishReason, message } = await llmCall(model, messages, true);
-    console.log(`[LLM][${agent.name}] iter=${iter} finish=${finishReason} tools=${toolCalls.length}`);
+    const { content, thinking, toolCalls, finishReason, message } = await llmCall(model, messages, true);
+    console.log(`[LLM][${agent.name}] iter=${iter} finish=${finishReason} tools=${toolCalls.length} thinking=${thinking.length}c`);
+
+    // Collect thinking across iterations
+    if (thinking) allThinking += (allThinking ? "\n---\n" : "") + thinking;
 
     // No tool calls → done
     if (!toolCalls.length || finishReason === "stop") {
       const finalText = content || "";
-      if (toolLog.length > 0) {
-        // Prepend a compact tool-use summary the user can see
-        const summary = toolLog.map((t) => `> 🔧 **${t.tool}**(${t.args}) → ${t.result.slice(0, 120)}${t.result.length > 120 ? "…" : ""}`).join("\n");
-        return `${summary}\n\n${finalText}`;
-      }
-      return finalText;
+      const summary = toolLog.length > 0
+        ? toolLog.map((t) => `> 🔧 **${t.tool}**(${t.args}) → ${t.result.slice(0, 120)}${t.result.length > 120 ? "…" : ""}`).join("\n")
+        : "";
+      return { content: summary ? `${summary}\n\n${finalText}` : finalText, thinking: allThinking };
     }
 
-    // Push assistant message with tool_calls so context is preserved
     messages.push(message);
 
-    // Execute each tool call and add results
     for (const tc of toolCalls) {
       const toolName = tc.function.name;
       let toolArgs = {};
       try { toolArgs = JSON.parse(tc.function.arguments); } catch {}
-
       const result = await executeTool(toolName, toolArgs, { agentId: agent.id, officeId });
       toolLog.push({ tool: toolName, args: JSON.stringify(toolArgs), result });
-
-      messages.push({
-        role: "tool",
-        tool_call_id: tc.id,
-        content: result,
-      });
+      messages.push({ role: "tool", tool_call_id: tc.id, content: result });
     }
   }
 
-  // Hit max iterations — return whatever content was last generated
-  return messages.findLast((m) => m.role === "assistant")?.content || "(max tool iterations reached)";
+  return { content: messages.findLast((m) => m.role === "assistant")?.content || "(max iterations)", thinking: allThinking };
 }
 
 // Parse @mentions from user message → returns { mentions: string[], cleanContent: string }
@@ -311,7 +308,9 @@ export async function GET(request, { params }) {
         const promises = targetAgents.map(async (agent) => {
           send({ type: "agent_start", agentId: agent.id, agentName: agent.name });
           try {
-            const rawContent = await callAgentLLM(agent, userContent, allAgents, history, officeId);
+            const result = await callAgentLLM(agent, userContent, allAgents, history, officeId);
+            const rawContent = result.content;
+            const thinking = result.thinking || "";
 
             // Detect A2A delegation tags
             const delegations = parseDelegations(rawContent);
@@ -323,12 +322,12 @@ export async function GET(request, { params }) {
             }
             callerContent = callerContent.trim();
 
-            // Send calling agent's bubble
+            // Send calling agent's bubble with thinking
             if (callerContent) {
               await createMessage({ officeId, agentId: agent.id, role: "agent", content: callerContent });
-              send({ type: "agent_chunk", agentId: agent.id, delta: callerContent, fullResponse: callerContent });
+              send({ type: "agent_chunk", agentId: agent.id, delta: callerContent, fullResponse: callerContent, thinking });
             }
-            send({ type: "agent_done", agentId: agent.id, fullResponse: callerContent });
+            send({ type: "agent_done", agentId: agent.id, fullResponse: callerContent, thinking });
 
             // Process each delegation as a SEPARATE bubble for the target agent
             for (const d of delegations) {
