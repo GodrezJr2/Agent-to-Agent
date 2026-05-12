@@ -36,6 +36,112 @@ function detectMentions(content: string): string[] {
   return mentions;
 }
 
+// ── Markdown-ish message formatter ────────────────────────────────────────
+const CODE_BLOCK_RE = /```(\w*)\n([\s\S]*?)```/g;
+const INLINE_CODE_RE = /`([^`]+)`/g;
+const TOOL_LINE_RE = /^> 🔧/;
+
+function FormattedMessage({ content }: { content: string }) {
+  if (!content) return null;
+
+  // Split into segments: code blocks vs text
+  const segments: Array<{ type: "text" | "code" | "tool"; text: string; lang?: string }> = [];
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+
+  // Reset regex state
+  CODE_BLOCK_RE.lastIndex = 0;
+
+  while ((match = CODE_BLOCK_RE.exec(content)) !== null) {
+    // Text before code block
+    if (match.index > lastIdx) {
+      const text = content.slice(lastIdx, match.index);
+      if (text.trim()) {
+        // Split text into tool lines and regular text
+        const lines = text.split("\n");
+        let toolBuf = "";
+        let textBuf = "";
+        for (const line of lines) {
+          if (TOOL_LINE_RE.test(line)) {
+            if (textBuf.trim()) { segments.push({ type: "text", text: textBuf }); textBuf = ""; }
+            toolBuf += (toolBuf ? "\n" : "") + line;
+          } else {
+            if (toolBuf) { segments.push({ type: "tool", text: toolBuf }); toolBuf = ""; }
+            textBuf += (textBuf ? "\n" : "") + line;
+          }
+        }
+        if (toolBuf) segments.push({ type: "tool", text: toolBuf });
+        if (textBuf.trim()) segments.push({ type: "text", text: textBuf });
+      }
+    }
+    // Code block
+    segments.push({ type: "code", text: match[2], lang: match[1] || undefined });
+    lastIdx = match.index + match[0].length;
+  }
+
+  // Remaining text
+  if (lastIdx < content.length) {
+    const text = content.slice(lastIdx);
+    const lines = text.split("\n");
+    let toolBuf = "";
+    let textBuf = "";
+    for (const line of lines) {
+      if (TOOL_LINE_RE.test(line)) {
+        if (textBuf.trim()) { segments.push({ type: "text", text: textBuf }); textBuf = ""; }
+        toolBuf += (toolBuf ? "\n" : "") + line;
+      } else {
+        if (toolBuf) { segments.push({ type: "tool", text: toolBuf }); toolBuf = ""; }
+        textBuf += (textBuf ? "\n" : "") + line;
+      }
+    }
+    if (toolBuf) segments.push({ type: "tool", text: toolBuf });
+    if (textBuf.trim()) segments.push({ type: "text", text: textBuf });
+  }
+
+  if (segments.length === 0) {
+    segments.push({ type: "text", text: content });
+  }
+
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.type === "code") {
+          return (
+            <div key={i} style={{ margin: "4px 0", borderRadius: 6, overflow: "hidden", background: "#0d0d1a", border: "1px solid #1f1f35" }}>
+              {seg.lang && <div style={{ padding: "2px 10px", fontSize: 10, color: "#6b7280", background: "#0a0a14", borderBottom: "1px solid #1f1f35" }}>{seg.lang}</div>}
+              <pre style={{ margin: 0, padding: "8px 10px", fontSize: 12, lineHeight: 1.5, color: "#e5e7eb", overflowX: "auto", whiteSpace: "pre", fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace" }}>
+                <code>{seg.text}</code>
+              </pre>
+            </div>
+          );
+        }
+        if (seg.type === "tool") {
+          return (
+            <div key={i} style={{ margin: "4px 0", borderRadius: 4, background: "#1a1a2e", border: "1px solid #2d2d4e", padding: "4px 8px", fontSize: 11, color: "#a78bfa", fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
+              {seg.text}
+            </div>
+          );
+        }
+        // Regular text with inline code + bold support
+        const parts = seg.text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+        return (
+          <div key={i} style={{ whiteSpace: "pre-wrap" }}>
+            {parts.map((part, j) => {
+              if (part.startsWith("`") && part.endsWith("`")) {
+                return <code key={j} style={{ background: "#1a1a2e", padding: "1px 4px", borderRadius: 3, fontSize: 12, color: "#f59e0b" }}>{part.slice(1, -1)}</code>;
+              }
+              if (part.startsWith("**") && part.endsWith("**")) {
+                return <strong key={j} style={{ color: "#f3f4f6" }}>{part.slice(2, -2)}</strong>;
+              }
+              return <span key={j}>{part}</span>;
+            })}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -343,15 +449,14 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
                   color: "#d1d5db",
                   lineHeight: 1.6,
                   wordBreak: "break-word",
-                  whiteSpace: "pre-wrap",
                 }}>
                   {msg.agentId && thoughtBubbles.has(msg.agentId) && (
                     <details style={{ marginBottom: 8, fontSize: 12, color: "#9ca3af", background: "#0f0f1a", borderRadius: 6, padding: "6px 10px" }}>
-                      <summary style={{ cursor: "pointer", fontWeight: 500, color: "#a78bfa" }}>Thinking...</summary>
-                      <div style={{ marginTop: 6, whiteSpace: "pre-wrap", color: "#9ca3af" }}>{thoughtBubbles.get(msg.agentId)}</div>
+                      <summary style={{ cursor: "pointer", fontWeight: 500, color: "#a78bfa", userSelect: "none" }}>🧠 Thinking...</summary>
+                      <div style={{ marginTop: 6, whiteSpace: "pre-wrap", color: "#9ca3af", fontSize: 11, lineHeight: 1.5 }}>{thoughtBubbles.get(msg.agentId)}</div>
                     </details>
                   )}
-                  {displayText}
+                  <FormattedMessage content={displayText} />
                   {isTyping && (
                     <span style={{
                       display: "inline-block",
