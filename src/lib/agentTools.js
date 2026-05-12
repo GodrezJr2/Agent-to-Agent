@@ -93,6 +93,91 @@ export const AGENT_TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "read_file",
+      description: "Read the contents of a file in the office workspace.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path to the file, relative to the office workspace root" },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_file",
+      description: "Create or overwrite a file in the office workspace with the given content.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path relative to workspace root" },
+          content: { type: "string", description: "The full content to write" },
+        },
+        required: ["path", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_dir",
+      description: "List files and directories in the office workspace.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path relative to workspace root. Use '.' for root." },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "bash",
+      description: "Run a shell command in the office workspace directory. Use for: npm install, pip install, mkdir, mv, cp, run tests, build, execute scripts, git commands, etc.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "The shell command to run" },
+        },
+        required: ["command"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "grep_file",
+      description: "Search for a pattern in a file or directory in the office workspace.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "Text or regex pattern to search for" },
+          path: { type: "string", description: "File or directory relative to workspace root. Use '.' for entire workspace." },
+        },
+        required: ["pattern"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_file",
+      description: "Delete a file in the office workspace.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path to the file, relative to the office workspace root" },
+        },
+        required: ["path"],
+      },
+    },
+  },
 ];
 
 // ── Tool executors ───────────────────────────────────────────────────────────
@@ -232,8 +317,123 @@ async function toolWebSearch({ query }) {
 
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "./db/driver.js";
+import { getOfficeById } from "./db/repos/officesRepo.js";
 import fs from "fs";
 import path from "path";
+import { exec } from "child_process";
+
+// ── Workspace sandbox ──────────────────────────────────────────────────────
+function resolveWorkspace(officeId, subPath = "") {
+  if (!officeId) throw new Error("No officeId provided");
+  const office = getOfficeById(officeId); // sync for simplicity
+  if (!office?.workspacePath) throw new Error(`Office has no workspace set. Configure it in office settings.`);
+  const ws = office.workspacePath;
+  if (!fs.existsSync(ws)) throw new Error(`Workspace path does not exist: ${ws}`);
+  const resolved = path.resolve(ws, subPath || ".");
+  if (!resolved.startsWith(path.resolve(ws))) throw new Error(`Access denied: "${subPath}" is outside workspace`);
+  return resolved;
+}
+
+async function getOfficeByIdSync(officeId) {
+  const db = await getAdapter();
+  const row = db.get(`SELECT workspacePath FROM offices WHERE id = ?`, [officeId]);
+  return row;
+}
+
+async function resolveWorkspaceAsync(officeId, subPath = "") {
+  if (!officeId) throw new Error("No officeId provided");
+  const row = await getOfficeByIdSync(officeId);
+  if (!row?.workspacePath) throw new Error(`Office has no workspace set. Configure it in office settings.`);
+  const ws = row.workspacePath;
+  if (!fs.existsSync(ws)) throw new Error(`Workspace path does not exist: ${ws}`);
+  const resolved = path.resolve(ws, subPath || ".");
+  if (!resolved.startsWith(path.resolve(ws))) throw new Error(`Access denied: "${subPath}" is outside workspace`);
+  return resolved;
+}
+
+async function toolReadFile({ path: filePath }, _agentId, officeId) {
+  const full = await resolveWorkspaceAsync(officeId, filePath);
+  if (!fs.existsSync(full)) return `File not found: ${filePath}`;
+  const stat = fs.statSync(full);
+  if (stat.isDirectory()) return toolListDir({ path: filePath }, _agentId, officeId);
+  const content = fs.readFileSync(full, "utf-8");
+  const truncated = content.length > 10000 ? content.slice(0, 10000) + "\n... (truncated)" : content;
+  return `File: ${filePath} (${stat.size} bytes)\n\n${truncated}`;
+}
+
+async function toolWriteFile({ path: filePath, content }, _agentId, officeId) {
+  const full = await resolveWorkspaceAsync(officeId, filePath);
+  const dir = path.dirname(full);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(full, content, "utf-8");
+  return `File written: ${filePath} (${content.length} chars)`;
+}
+
+async function toolListDir({ path: dirPath = "." }, _agentId, officeId) {
+  const full = await resolveWorkspaceAsync(officeId, dirPath);
+  if (!fs.existsSync(full)) return `Directory not found: ${dirPath}`;
+  const entries = fs.readdirSync(full, { withFileTypes: true });
+  const lines = entries.map(e => {
+    const prefix = e.isDirectory() ? "[DIR]" : "[FILE]";
+    return `${prefix}  ${e.name}`;
+  });
+  return lines.length > 0 ? lines.join("\n") : "(empty directory)";
+}
+
+async function toolBash({ command }, _agentId, officeId) {
+  const ws = await resolveWorkspaceAsync(officeId);
+  return new Promise((resolve) => {
+    exec(command, { cwd: ws, timeout: 30000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      let result = "";
+      if (stdout) result += stdout;
+      if (stderr) result += (result ? "\n[stderr]\n" : "") + stderr;
+      if (err && !result) result = `Error: ${err.message}`;
+      if (!result.trim()) result = "(no output)";
+      resolve(result.slice(0, 8000));
+    });
+  });
+}
+
+async function toolGrepFile({ pattern, path: searchPath = "." }, _agentId, officeId) {
+  const full = await resolveWorkspaceAsync(officeId, searchPath);
+  const results = [];
+  function searchDir(dir) {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      const fp = path.join(dir, e.name);
+      if (e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules") searchDir(fp);
+      else if (e.isFile() && e.name !== "package-lock.json") {
+        try {
+          const content = fs.readFileSync(fp, "utf-8");
+          const lines = content.split("\n");
+          lines.forEach((line, i) => {
+            if (line.includes(pattern)) {
+              results.push(`${path.relative(full, fp)}:${i + 1}: ${line.trim().slice(0, 200)}`);
+            }
+          });
+        } catch {}
+      }
+    }
+  }
+  if (fs.statSync(full).isFile()) {
+    const content = fs.readFileSync(full, "utf-8");
+    content.split("\n").forEach((line, i) => {
+      if (line.includes(pattern)) results.push(`:${i + 1}: ${line.trim().slice(0, 200)}`);
+    });
+  } else {
+    searchDir(full);
+  }
+  if (results.length === 0) return `No matches found for "${pattern}" in ${searchPath}`;
+  if (results.length > 50) return results.slice(0, 50).join("\n") + `\n... and ${results.length - 50} more matches`;
+  return results.join("\n");
+}
+
+async function toolDeleteFile({ path: filePath }, _agentId, officeId) {
+  const full = await resolveWorkspaceAsync(officeId, filePath);
+  if (!fs.existsSync(full)) return `File not found: ${filePath}`;
+  fs.unlinkSync(full);
+  return `Deleted: ${filePath}`;
+}
 
 async function toolRemember({ key, value }, agentId, officeId) {
   const db = await getAdapter();
@@ -290,6 +490,12 @@ export async function executeTool(toolName, toolArgs, { agentId, officeId } = {}
       case "recall":        return await toolRecall(toolArgs, agentId);
       case "generate_file": return await toolGenerateFile(toolArgs);
       case "schedule_task": return await toolScheduleTask(toolArgs, agentId, officeId);
+      case "read_file":    return await toolReadFile(toolArgs, agentId, officeId);
+      case "write_file":   return await toolWriteFile(toolArgs, agentId, officeId);
+      case "list_dir":     return await toolListDir(toolArgs, agentId, officeId);
+      case "bash":         return await toolBash(toolArgs, agentId, officeId);
+      case "grep_file":    return await toolGrepFile(toolArgs, agentId, officeId);
+      case "delete_file":  return await toolDeleteFile(toolArgs, agentId, officeId);
       default: return `Unknown tool: ${toolName}`;
     }
   } catch (err) {

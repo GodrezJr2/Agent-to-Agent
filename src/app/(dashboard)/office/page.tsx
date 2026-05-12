@@ -16,19 +16,24 @@ export default function OfficeIndex() {
     } catch {} finally { setLoading(false); }
   }
 
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newWorkspace, setNewWorkspace] = useState("");
+
   useEffect(() => { loadOffices(); }, []);
 
   async function createOffice() {
+    if (!newName.trim()) return;
     setCreating(true);
     try {
       const res = await fetch("/api/offices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "New Office", description: "" }),
+        body: JSON.stringify({ name: newName, description: "", workspacePath: newWorkspace || null }),
       });
       const data = await res.json();
       if (data.office) window.location.href = `/office/${data.office.id}`;
-    } catch {} finally { setCreating(false); }
+    } catch {} finally { setCreating(false); setShowCreate(false); }
   }
 
   return (
@@ -40,11 +45,42 @@ export default function OfficeIndex() {
             <h1 className="text-white text-2xl font-bold mt-2">Offices</h1>
             <p className="text-gray-500 text-sm mt-1">Your Agent OS workspaces</p>
           </div>
-          <button onClick={createOffice} disabled={creating}
+          <button onClick={() => setShowCreate(true)} disabled={creating}
             className="px-4 py-2 bg-green-600 text-white text-sm rounded hover:bg-green-500 disabled:opacity-50">
             {creating ? "Creating..." : "+ New Office"}
           </button>
         </div>
+
+        {/* Create office modal */}
+        {showCreate && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowCreate(false)}>
+            <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+              <h2 className="text-white text-lg font-semibold mb-4">New Office</h2>
+              <div className="space-y-3">
+                <div>
+                  <label className="text-gray-400 text-xs">Name *</label>
+                  <input value={newName} onChange={e => setNewName(e.target.value)}
+                    className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-green-500 outline-none"
+                    placeholder="Marketing Team" autoFocus onKeyDown={e => e.key === "Enter" && createOffice()} />
+                </div>
+                <div>
+                  <label className="text-gray-400 text-xs">Workspace Path (optional)</label>
+                  <input value={newWorkspace} onChange={e => setNewWorkspace(e.target.value)}
+                    className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-green-500 outline-none"
+                    placeholder="C:\Projects\my-app" />
+                  <p className="text-gray-600 text-xs mt-1">Agents in this office can read/write files and run commands in this folder.</p>
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <button onClick={() => setShowCreate(false)} className="flex-1 px-4 py-2 bg-gray-800 text-gray-300 text-sm rounded hover:bg-gray-700">Cancel</button>
+                  <button onClick={createOffice} disabled={creating || !newName.trim()}
+                    className="flex-1 px-4 py-2 bg-green-600 text-white text-sm rounded hover:bg-green-500 disabled:opacity-50">
+                    {creating ? "Creating..." : "Create"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {loading && <p className="text-gray-500">Loading offices...</p>}
 
