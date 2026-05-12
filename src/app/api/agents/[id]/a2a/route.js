@@ -1,0 +1,190 @@
+import { NextResponse } from "next/server";
+import { getAgentById, getComboById, getCombos, createTask, getTask, updateTask, getChatMessages, getActiveAgentsByOffice } from "@/lib/db";
+
+export const dynamic = "force-dynamic";
+
+const PORT = process.env.PORT || 20128;
+const BASE_URL = `http://localhost:${PORT}`;
+
+function jsonRpcError(id, code, message) {
+  return NextResponse.json({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
+}
+
+function jsonRpcResult(id, result) {
+  return NextResponse.json({ jsonrpc: "2.0", id, result });
+}
+
+async function resolveModel(agent) {
+  if (agent.modelId) {
+    return agent.modelId.startsWith("openrouter/") ? agent.modelId : `openrouter/${agent.modelId}`;
+  }
+  if (agent.comboId) {
+    try {
+      const combo = await getComboById(agent.comboId);
+      if (combo?.models) {
+        const models = typeof combo.models === "string" ? JSON.parse(combo.models) : combo.models;
+        if (Array.isArray(models) && models.length > 0) return models[0].model || models[0];
+      }
+    } catch {}
+  }
+  try {
+    const combos = await getCombos();
+    if (combos?.length > 0 && combos[0].models) {
+      const models = typeof combos[0].models === "string" ? JSON.parse(combos[0].models) : combos[0].models;
+      if (Array.isArray(models) && models.length > 0) return models[0].model || models[0];
+    }
+  } catch {}
+  return "openrouter/nvidia/nemotron-3-super-120b-a12b:free";
+}
+
+async function callAgentLLM(agent, taskMessage, { fromAgent, officeHistory, allAgents } = {}) {
+  const model = await resolveModel(agent);
+  const messages = [];
+
+  // System prompt + delegation context
+  let systemContent = agent.systemPrompt || "";
+  if (fromAgent) {
+    systemContent += `\n\nYou are being called by ${fromAgent.name}${fromAgent.role ? ` (${fromAgent.role})` : ""} to handle a specific task. Respond directly and helpfully with full context.`;
+  }
+  if (systemContent.trim()) messages.push({ role: "system", content: systemContent });
+
+  // Inject shared office conversation history so agent has context
+  if (officeHistory && officeHistory.length > 0) {
+    for (const msg of officeHistory) {
+      if (msg.role === "user") {
+        messages.push({ role: "user", content: msg.content });
+      } else if (msg.role === "agent") {
+        const name = allAgents?.find((a) => a.id === msg.agentId)?.name || "Agent";
+        if (msg.agentId === agent.id) {
+          messages.push({ role: "assistant", content: msg.content });
+        } else {
+          messages.push({ role: "user", content: `[${name} said]: ${msg.content}` });
+        }
+      }
+    }
+  }
+
+  // The delegated task message
+  messages.push({ role: "user", content: taskMessage });
+
+  const res = await fetch(`${BASE_URL}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages, stream: false, max_tokens: 2048 }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "Unknown error");
+    throw new Error(`LLM call failed (${res.status}): ${errText.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || "";
+}
+
+function extractTextFromMessage(message) {
+  if (!message) return "";
+  if (typeof message === "string") return message;
+  const parts = message.parts || message.content || [];
+  if (Array.isArray(parts)) {
+    return parts.map((p) => (typeof p === "string" ? p : p.text || p.content || "")).join("\n");
+  }
+  return String(message);
+}
+
+export async function POST(request, { params }) {
+  const { id: agentId } = await params;
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonRpcError(null, -32700, "Parse error");
+  }
+
+  const { jsonrpc, method, params: rpcParams, id: rpcId } = body;
+  if (jsonrpc !== "2.0") return jsonRpcError(rpcId, -32600, "Invalid Request");
+  if (!method) return jsonRpcError(rpcId, -32600, "Method required");
+
+  const agent = await getAgentById(agentId);
+  if (!agent) return jsonRpcError(rpcId, -32001, "Agent not found");
+
+  // message/send — creates task, runs LLM, returns completed task
+  if (method === "message/send") {
+    const message = rpcParams?.message;
+    if (!message) return jsonRpcError(rpcId, -32602, "message required");
+
+    const userContent = extractTextFromMessage(message);
+    const fromAgentId = rpcParams?.metadata?.fromAgentId || null;
+    const officeId = agent.officeId;
+
+    const task = await createTask({ agentId, fromAgentId, officeId, input: { message: userContent } });
+
+    try {
+      await updateTask(task.id, { status: "working" });
+
+      // Fetch office history + all agents for context
+      const [officeHistory, allAgents, fromAgent] = await Promise.all([
+        getChatMessages(officeId, { limit: 20 }),
+        getActiveAgentsByOffice(officeId),
+        fromAgentId ? getAgentById(fromAgentId) : Promise.resolve(null),
+      ]);
+
+      const responseContent = await callAgentLLM(agent, userContent, { fromAgent, officeHistory, allAgents });
+      const completed = await updateTask(task.id, {
+        status: "completed",
+        output: {
+          message: {
+            role: "agent",
+            parts: [{ type: "text", text: responseContent }],
+          },
+        },
+      });
+
+      return jsonRpcResult(rpcId, {
+        id: task.id,
+        status: { state: "completed" },
+        artifacts: [{ parts: [{ type: "text", text: responseContent }] }],
+        metadata: completed,
+      });
+    } catch (err) {
+      await updateTask(task.id, { status: "failed", error: err.message });
+      return jsonRpcError(rpcId, -32000, err.message);
+    }
+  }
+
+  // tasks/get — return task by ID
+  if (method === "tasks/get") {
+    const taskId = rpcParams?.id || rpcParams?.taskId;
+    if (!taskId) return jsonRpcError(rpcId, -32602, "task id required");
+    const task = await getTask(taskId);
+    if (!task) return jsonRpcError(rpcId, -32001, "Task not found");
+    return jsonRpcResult(rpcId, { id: task.id, status: { state: task.status }, metadata: task });
+  }
+
+  // tasks/cancel — mark task cancelled
+  if (method === "tasks/cancel") {
+    const taskId = rpcParams?.id || rpcParams?.taskId;
+    if (!taskId) return jsonRpcError(rpcId, -32602, "task id required");
+    const task = await getTask(taskId);
+    if (!task) return jsonRpcError(rpcId, -32001, "Task not found");
+    if (task.status === "completed" || task.status === "failed") {
+      return jsonRpcError(rpcId, -32002, `Task already ${task.status}`);
+    }
+    const cancelled = await updateTask(taskId, { status: "cancelled" });
+    return jsonRpcResult(rpcId, { id: taskId, status: { state: "cancelled" }, metadata: cancelled });
+  }
+
+  return jsonRpcError(rpcId, -32601, `Method not found: ${method}`);
+}
+
+// GET returns agent info + recent tasks
+export async function GET(request, { params }) {
+  const { id } = await params;
+  const agent = await getAgentById(id);
+  if (!agent) return NextResponse.json({ error: "Agent not found" }, { status: 404 });
+
+  const { getTasksByAgent } = await import("@/lib/db");
+  const recentTasks = await getTasksByAgent(id, { limit: 10 });
+  return NextResponse.json({ agentId: id, name: agent.name, recentTasks });
+}

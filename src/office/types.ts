@@ -127,6 +127,14 @@ export interface OfficeLayout {
   layoutRevision?: number;
 }
 
+export interface AgentData {
+  id: string;
+  name: string;
+  seatX?: number;
+  seatY?: number;
+  characterSprite?: string;
+}
+
 export interface Character {
   id: number;
   state: CharacterState;

@@ -9,10 +9,12 @@ function rowToAgent(row) {
     name: row.name,
     role: row.role,
     comboId: row.comboId,
+    modelId: row.modelId || null,
     systemPrompt: row.systemPrompt,
     characterSprite: row.characterSprite || "default",
     seatX: row.seatX ?? 0,
     seatY: row.seatY ?? 0,
+    managerId: row.managerId || null,
     isActive: row.isActive === 1 || row.isActive === true,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -29,7 +31,7 @@ export async function getAgentById(id) {
   return rowToAgent(db.get(`SELECT * FROM officeAgents WHERE id = ?`, [id]));
 }
 
-export async function createAgent({ officeId, name, role, comboId, systemPrompt, characterSprite }) {
+export async function createAgent({ officeId, name, role, comboId, modelId, systemPrompt, characterSprite, managerId }) {
   const db = await getAdapter();
   const agent = {
     id: uuidv4(),
@@ -37,17 +39,19 @@ export async function createAgent({ officeId, name, role, comboId, systemPrompt,
     name,
     role: role || null,
     comboId: comboId || null,
+    modelId: modelId || null,
     systemPrompt: systemPrompt || null,
     characterSprite: characterSprite || "default",
     seatX: 0,
     seatY: 0,
+    managerId: managerId || null,
     isActive: true,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
   db.run(
-    `INSERT INTO officeAgents(id, officeId, name, role, comboId, systemPrompt, characterSprite, seatX, seatY, isActive, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [agent.id, agent.officeId, agent.name, agent.role, agent.comboId, agent.systemPrompt, agent.characterSprite, agent.seatX, agent.seatY, 1, agent.createdAt, agent.updatedAt]
+    `INSERT INTO officeAgents(id, officeId, name, role, comboId, modelId, systemPrompt, characterSprite, seatX, seatY, managerId, isActive, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [agent.id, agent.officeId, agent.name, agent.role, agent.comboId, agent.modelId, agent.systemPrompt, agent.characterSprite, agent.seatX, agent.seatY, agent.managerId, 1, agent.createdAt, agent.updatedAt]
   );
   return agent;
 }
@@ -64,16 +68,18 @@ export async function updateAgent(id, data) {
       name: data.name ?? current.name,
       role: data.role !== undefined ? data.role : current.role,
       comboId: data.comboId !== undefined ? data.comboId : current.comboId,
+      modelId: data.modelId !== undefined ? data.modelId : current.modelId,
       systemPrompt: data.systemPrompt !== undefined ? data.systemPrompt : current.systemPrompt,
       characterSprite: data.characterSprite ?? current.characterSprite,
       seatX: data.seatX ?? current.seatX,
       seatY: data.seatY ?? current.seatY,
+      managerId: data.managerId !== undefined ? data.managerId : current.managerId,
       isActive: data.isActive !== undefined ? data.isActive : current.isActive,
       updatedAt: new Date().toISOString(),
     };
     db.run(
-      `UPDATE officeAgents SET name = ?, role = ?, comboId = ?, systemPrompt = ?, characterSprite = ?, seatX = ?, seatY = ?, isActive = ?, updatedAt = ? WHERE id = ?`,
-      [merged.name, merged.role, merged.comboId, merged.systemPrompt, merged.characterSprite, merged.seatX, merged.seatY, merged.isActive ? 1 : 0, merged.updatedAt, id]
+      `UPDATE officeAgents SET name = ?, role = ?, comboId = ?, modelId = ?, systemPrompt = ?, characterSprite = ?, seatX = ?, seatY = ?, managerId = ?, isActive = ?, updatedAt = ? WHERE id = ?`,
+      [merged.name, merged.role, merged.comboId, merged.modelId, merged.systemPrompt, merged.characterSprite, merged.seatX, merged.seatY, merged.managerId, merged.isActive ? 1 : 0, merged.updatedAt, id]
     );
     result = merged;
   });

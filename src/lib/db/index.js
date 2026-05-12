@@ -73,6 +73,7 @@ export * from "./repos/chatRepo.js";
 export * from "./repos/cronJobsRepo.js";
 export * from "./repos/memoryRepo.js";
 export * from "./repos/a2aRepo.js";
+export * from "./repos/a2aTasksRepo.js";
 
 // Export/import full DB
 export async function exportDb() {
