@@ -115,6 +115,7 @@ export const TABLES = {
       seatX: "INTEGER DEFAULT 0",
       seatY: "INTEGER DEFAULT 0",
       managerId: "TEXT",
+      thinkingBudget: "INTEGER DEFAULT 0",
       isActive: "INTEGER DEFAULT 1",
       createdAt: "TEXT NOT NULL",
       updatedAt: "TEXT NOT NULL",

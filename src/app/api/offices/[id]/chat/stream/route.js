@@ -142,11 +142,13 @@ function buildHistoryMessages(history, currentAgent, allAgents) {
 }
 
 // Single non-streaming LLM call — returns { content, toolCalls }
-async function llmCall(model, messages, useTools) {
+async function llmCall(model, messages, useTools, thinkingBudget = 0) {
   const body = { model, messages, stream: false, max_tokens: 4096 };
   if (useTools) body.tools = AGENT_TOOLS;
-  // Enable thinking/reasoning for models that support it
-  body.thinking = { type: "enabled", budget_tokens: 4000 };
+  // Enable thinking/reasoning if budget > 0; 0 = disabled
+  if (thinkingBudget > 0) {
+    body.thinking = { type: "enabled", budget_tokens: thinkingBudget };
+  }
 
   const res = await fetch(`${BASE_URL}/v1/chat/completions`, {
     method: "POST",
@@ -190,7 +192,7 @@ async function callAgentLLM(agent, userContent, allAgents, history = [], officeI
   const MAX_ITERATIONS = 6;
 
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-    const { content, thinking, toolCalls, finishReason, message } = await llmCall(model, messages, true);
+    const { content, thinking, toolCalls, finishReason, message } = await llmCall(model, messages, true, agent.thinkingBudget ?? 0);
     console.log(`[LLM][${agent.name}] iter=${iter} finish=${finishReason} tools=${toolCalls.length} thinking=${thinking.length}c`);
 
     // Collect thinking across iterations
