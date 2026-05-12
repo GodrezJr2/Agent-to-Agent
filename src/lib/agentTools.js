@@ -317,23 +317,9 @@ async function toolWebSearch({ query }) {
 
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "./db/driver.js";
-import { getOfficeById } from "./db/repos/officesRepo.js";
-import fs from "fs";
-import path from "path";
 import { exec } from "child_process";
 
 // ── Workspace sandbox ──────────────────────────────────────────────────────
-function resolveWorkspace(officeId, subPath = "") {
-  if (!officeId) throw new Error("No officeId provided");
-  const office = getOfficeById(officeId); // sync for simplicity
-  if (!office?.workspacePath) throw new Error(`Office has no workspace set. Configure it in office settings.`);
-  const ws = office.workspacePath;
-  if (!fs.existsSync(ws)) throw new Error(`Workspace path does not exist: ${ws}`);
-  const resolved = path.resolve(ws, subPath || ".");
-  if (!resolved.startsWith(path.resolve(ws))) throw new Error(`Access denied: "${subPath}" is outside workspace`);
-  return resolved;
-}
-
 async function getOfficeByIdSync(officeId) {
   const db = await getAdapter();
   const row = db.get(`SELECT workspacePath FROM offices WHERE id = ?`, [officeId]);
