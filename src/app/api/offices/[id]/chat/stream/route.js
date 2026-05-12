@@ -43,7 +43,7 @@ async function resolveModel(agent) {
     console.warn(`[LLM][${agent.name}] failed to load combos:`, e.message);
   }
   // Last resort
-  const fallback = "openrouter/google/gemini-2.5-flash:free";
+  const fallback = "oc/deepseek-v4-flash-free";
   console.warn(`[LLM][${agent.name}] no model configured — fallback: ${fallback}`);
   return fallback;
 }
