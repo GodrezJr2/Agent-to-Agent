@@ -165,7 +165,8 @@ async function llmCall(model, messages, useTools, thinkingBudget = 0) {
   const msg = choice?.message || {};
   return {
     content: msg.content || "",
-    thinking: msg.reasoning_content || msg.reasoning || msg.thinking || "",
+    // reasoning_content = OpenAI standard, reasoning = DeepSeek R1 via some providers
+    thinking: msg.reasoning_content || msg.reasoning || "",
     toolCalls: msg.tool_calls || [],
     finishReason: choice?.finish_reason || "stop",
     message: msg,
