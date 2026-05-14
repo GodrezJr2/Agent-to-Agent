@@ -8,9 +8,11 @@
 
   [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
   [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
+  [![A2A Protocol](https://img.shields.io/badge/A2A-Protocol-6f42c1)](https://google.github.io/A2A/)
   [![Powered by 9Router](https://img.shields.io/badge/Powered%20by-9Router-orange)](https://github.com/decolua/9router)
+  [![Inspired by Pixel Agents](https://img.shields.io/badge/Inspired%20by-Pixel%20Agents-brightgreen)](https://github.com/pablodelucca/pixel-agents)
 
-  [✨ Features](#-features) • [🚀 Quick Start](#-quick-start) • [🤖 How Agents Talk](#-how-agents-talk-to-each-other) • [🛠️ Tools](#-agent-tools) • [🧪 Tested Models](#-tested-models)
+  [✨ Features](#-features) • [🚀 Quick Start](#-quick-start) • [🤖 How Agents Talk](#-how-agents-talk-to-each-other) • [🛠️ Tools](#-agent-tools) • [📡 A2A Protocol](#-a2a-protocol) • [🧪 Tested Models](#-tested-models)
 
 </div>
 
@@ -186,6 +188,56 @@ Each agent also exposes a standard A2A discovery card:
 ```
 GET /api/agents/{id}/.well-known/agent.json
 ```
+
+---
+
+## 📡 A2A Protocol
+
+This project implements [Google's Agent-to-Agent (A2A) Protocol](https://google.github.io/A2A/) — an open standard for inter-agent communication using JSON-RPC 2.0.
+
+Every agent in the office is a fully compliant A2A server:
+
+**Discovery**
+```
+GET /api/agents/{id}/.well-known/agent.json
+```
+```json
+{
+  "name": "Kevin",
+  "description": "Designer",
+  "url": "http://localhost:20128/api/agents/{id}/a2a",
+  "capabilities": { "streaming": false, "stateTransitionHistory": true },
+  "skills": [{ "id": "default", "name": "Designer" }]
+}
+```
+
+**Sending a task**
+```
+POST /api/agents/{id}/a2a
+```
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "message/send",
+  "params": {
+    "message": { "role": "user", "parts": [{ "type": "text", "text": "Write a README" }] },
+    "metadata": { "fromAgentId": "..." }
+  }
+}
+```
+
+Supported methods: `message/send` · `tasks/get` · `tasks/cancel`
+
+This means any external A2A-compatible system can call your agents directly — not just other agents in the same office.
+
+---
+
+## 🎮 Inspired by Pixel Agents
+
+The pixel-art office concept is inspired by [Pixel Agents](https://github.com/pablodelucca/pixel-agents) — a VS Code extension that turns Claude Code agents into animated characters you can watch work in real time.
+
+This project takes that idea further: instead of VS Code terminals, agents live in a **web-based office** and can talk to *each other* autonomously using the A2A protocol. No IDE required.
 
 ---
 
