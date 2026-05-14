@@ -382,6 +382,7 @@ export async function GET(request, { params }) {
             send({ type: "agent_done", agentId: agent.id, fullResponse: callerContent, thinking });
 
             // Process each delegation as a SEPARATE bubble for the target agent
+            const delegationResults = [];
             for (const d of delegations) {
               const target = allAgents.find(
                 (a) => a.id !== agent.id && (
@@ -403,10 +404,31 @@ export async function GET(request, { params }) {
                 await createMessage({ officeId, agentId: target.id, role: "agent", content: reply });
                 send({ type: "agent_chunk", agentId: target.id, delta: reply, fullResponse: reply });
                 send({ type: "agent_done", agentId: target.id, fullResponse: reply });
+                delegationResults.push({ agentName: target.name, reply });
               } catch (err) {
                 console.error(`[A2A][${agent.name}→${target.name}] error:`, err.message);
                 send({ type: "agent_error", agentId: target.id, error: err.message });
+                delegationResults.push({ agentName: target.name, reply: `Error: ${err.message}` });
               }
+            }
+
+            // After all delegates finish, call the delegating agent back to verify
+            if (delegationResults.length > 0) {
+              const resultsText = delegationResults
+                .map((r) => `**${r.agentName}:** ${r.reply}`)
+                .join("\n\n");
+              const verifyPrompt = `Your team has completed their tasks. Here are their reports:\n\n${resultsText}\n\nReview their work and give a final summary.`;
+
+              console.log(`[A2A][${agent.name}] verify callback with ${delegationResults.length} results`);
+              send({ type: "agent_start", agentId: agent.id, agentName: agent.name });
+              const updatedHistory = await getChatMessages(officeId, { limit: 30 });
+              const verifyResult = await callAgentLLM(agent, verifyPrompt, allAgents, updatedHistory, officeId);
+              const verifyContent = verifyResult.content;
+              if (verifyContent) {
+                await createMessage({ officeId, agentId: agent.id, role: "agent", content: verifyContent });
+                send({ type: "agent_chunk", agentId: agent.id, delta: verifyContent, fullResponse: verifyContent, thinking: verifyResult.thinking });
+              }
+              send({ type: "agent_done", agentId: agent.id, fullResponse: verifyContent, thinking: verifyResult.thinking });
             }
           } catch (err) {
             console.error(`[LLM][${agent.name}] ERROR:`, err.message);
