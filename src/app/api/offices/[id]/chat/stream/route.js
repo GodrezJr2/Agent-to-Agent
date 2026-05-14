@@ -73,15 +73,21 @@ function buildAgentContext(currentAgent, allAgents) {
     for (const r of directReports) {
       lines.push(`  - ${r.name}${r.role ? ` (${r.role})` : ""}`);
     }
-    lines.push(`\nTo assign a task to a direct report, you MUST write exactly: [A2A:AgentName:task description]`);
-    lines.push(`CRITICAL: Always use [A2A:Name:task] format to delegate. NEVER write *(asking ...)* — that is internal UI text, not a delegation command.`);
+    lines.push(`\nDELEGATION — exact syntax required to trigger a real agent call:`);
+    lines.push(`  [A2A:AgentName:task description]`);
+    lines.push(`\nExample: if asked to have Kevin write a file, your reply must contain:`);
+    lines.push(`  [A2A:Kevin:write a file called hello.txt with content Hello World]`);
+    lines.push(`\nRULES:`);
+    lines.push(`  - The bracket tag [A2A:...] is the ONLY way to delegate. Without it, nothing happens.`);
+    lines.push(`  - Do NOT write *(asking Kevin...)* — that is display-only text and will NOT trigger Kevin.`);
+    lines.push(`  - Do NOT address Kevin directly in your text without the tag.`);
   } else if (others.length > 0) {
-    lines.push(`\nYour colleagues:`);
-    for (const a of others) {
-      lines.push(`  - ${a.name}${a.role ? ` (${a.role})` : ""}`);
-    }
-    lines.push(`\nTo delegate to a colleague, you MUST write exactly: [A2A:AgentName:task]`);
-    lines.push(`CRITICAL: Always use [A2A:Name:task] format. NEVER write *(asking ...)* — that is internal UI text, not a delegation command.`);
+    lines.push(`\nDELEGATION — exact syntax required to trigger a real agent call:`);
+    lines.push(`  [A2A:AgentName:task description]`);
+    lines.push(`\nExample: [A2A:Kevin:write a file called hello.txt]`);
+    lines.push(`\nRULES:`);
+    lines.push(`  - The bracket tag [A2A:...] is the ONLY way to delegate.`);
+    lines.push(`  - Do NOT write *(asking ...)* — that is display-only and will NOT trigger anyone.`);
   }
 
   return `\n\n---\n${lines.join("\n")}`;
