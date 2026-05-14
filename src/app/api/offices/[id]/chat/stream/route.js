@@ -339,9 +339,11 @@ export async function GET(request, { params }) {
             }
             callerContent = callerContent.trim();
 
-            // Send calling agent's bubble with thinking
+            // Save original rawContent to DB so LLM history sees [A2A:...] tags (not the cleaned text),
+            // preventing the LLM from copying *(asking X...)* literally on the next turn.
+            // Send the cleaned callerContent to the UI only.
             if (callerContent) {
-              await createMessage({ officeId, agentId: agent.id, role: "agent", content: callerContent });
+              await createMessage({ officeId, agentId: agent.id, role: "agent", content: rawContent });
               send({ type: "agent_chunk", agentId: agent.id, delta: callerContent, fullResponse: callerContent, thinking });
             }
             send({ type: "agent_done", agentId: agent.id, fullResponse: callerContent, thinking });
