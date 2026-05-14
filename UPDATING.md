@@ -19,6 +19,7 @@ git remote add upstream https://github.com/decolua/9router
 | **Our custom code** | `src/app/api/offices/`, `src/app/api/agents/`, `src/lib/agentTools.js`, `src/office/`, `src/lib/db/repos/agentsRepo.js`, `officesRepo.js`, `a2aTasksRepo.js` | ✅ 9Router never touches these |
 | **9Router routing engine** | `open-sse/`, `src/app/api/v1/`, `src/app/api/pricing/` | ✅ Safe to blindly overwrite |
 | **Shared DB files** | `src/lib/db/schema.js`, `src/lib/db/index.js` | ⚠️ Always review manually |
+| **Sidebar nav** | `src/shared/components/Sidebar.js` | ⚠️ Re-add Offices link after pulling |
 
 ---
 
