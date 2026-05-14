@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAgentById, getComboById, getCombos, createTask, getTask, updateTask, getChatMessages, getActiveAgentsByOffice } from "@/lib/db";
+import { AGENT_TOOLS, executeTool } from "@/lib/agentTools";
 
 export const dynamic = "force-dynamic";
 
@@ -67,19 +68,47 @@ async function callAgentLLM(agent, taskMessage, { fromAgent, officeHistory, allA
   // The delegated task message
   messages.push({ role: "user", content: taskMessage });
 
-  const res = await fetch(`${BASE_URL}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, stream: false, max_tokens: 2048 }),
-  });
+  const officeId = agent.officeId;
+  const toolLog = [];
+  const MAX_ITERATIONS = 6;
 
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "Unknown error");
-    throw new Error(`LLM call failed (${res.status}): ${errText.slice(0, 200)}`);
+  for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+    const res = await fetch(`${BASE_URL}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, messages, stream: false, max_tokens: 2048, tools: AGENT_TOOLS }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "Unknown error");
+      throw new Error(`LLM call failed (${res.status}): ${errText.slice(0, 200)}`);
+    }
+
+    const data = await res.json();
+    const choice = data.choices?.[0];
+    const msg = choice?.message || {};
+    const content = typeof msg.content === "string" ? msg.content : "";
+    const toolCalls = msg.tool_calls || [];
+
+    if (!toolCalls.length || choice?.finish_reason === "stop") {
+      const summary = toolLog.length > 0
+        ? toolLog.map((t) => `> 🔧 **${t.tool}**(${t.args}) → ${t.result.slice(0, 120)}${t.result.length > 120 ? "…" : ""}`).join("\n")
+        : "";
+      return summary ? `${summary}\n\n${content}` : content;
+    }
+
+    messages.push(msg);
+    for (const tc of toolCalls) {
+      const toolName = tc.function.name;
+      let toolArgs = {};
+      try { toolArgs = JSON.parse(tc.function.arguments); } catch {}
+      const result = await executeTool(toolName, toolArgs, { agentId: agent.id, officeId });
+      toolLog.push({ tool: toolName, args: JSON.stringify(toolArgs), result });
+      messages.push({ role: "tool", tool_call_id: tc.id, content: result });
+    }
   }
 
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || "";
+  return messages.findLast((m) => m.role === "assistant")?.content || "(max iterations)";
 }
 
 function extractTextFromMessage(message) {
