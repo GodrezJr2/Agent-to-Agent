@@ -1,6 +1,6 @@
 <div align="center">
 
-  <img src="./images/office-preview.png" alt="Agent-to-Agent Office" width="900"/>
+  <img src="./images/demo.gif" alt="Agent-to-Agent Office Demo" width="900"/>
 
   # 🏢 Agent-to-Agent Office
 
