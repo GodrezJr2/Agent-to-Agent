@@ -38,12 +38,35 @@ async function resolveModel(agent) {
   return "openrouter/nvidia/nemotron-3-super-120b-a12b:free";
 }
 
+function buildAutoSystemPrompt(agent, allAgents) {
+  const name = agent.name;
+  const role = agent.role ? ` (${agent.role})` : "";
+  const directReports = (allAgents || []).filter((a) => a.managerId === agent.id);
+  const manager = agent.managerId ? (allAgents || []).find((a) => a.id === agent.managerId) : null;
+
+  if (directReports.length > 0) {
+    const reportNames = directReports.map((r) => `${r.name}${r.role ? ` (${r.role})` : ""}`).join(", ");
+    return `You are ${name}${role}. You lead a team and delegate work to your direct reports: ${reportNames}.
+
+When given a task, break it down and assign each part to the right team member using [A2A:Name:task].
+After they complete their work, read their output using read_file and write a final summary confirming everything is done.
+Never do your team's work yourself — delegate and verify.`;
+  }
+
+  const managerLine = manager ? ` You report to ${manager.name}${manager.role ? ` (${manager.role})` : ""}.` : "";
+  return `You are ${name}${role}.${managerLine}
+
+When assigned a task, complete it using the tools available (write_file, read_file, bash, web_search, etc.).
+Always actually execute the work — don't just describe what you would do.
+Report back clearly with what you did and what files or output were created.`;
+}
+
 async function callAgentLLM(agent, taskMessage, { fromAgent, officeHistory, allAgents } = {}) {
   const model = await resolveModel(agent);
   const messages = [];
 
   // System prompt + delegation context
-  let systemContent = agent.systemPrompt || "";
+  let systemContent = agent.systemPrompt || buildAutoSystemPrompt(agent, allAgents);
   if (fromAgent) {
     systemContent += `\n\nYou are being called by ${fromAgent.name}${fromAgent.role ? ` (${fromAgent.role})` : ""} to handle a specific task. Respond directly and helpfully with full context.`;
   }

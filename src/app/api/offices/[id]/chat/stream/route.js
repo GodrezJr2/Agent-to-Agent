@@ -48,6 +48,30 @@ async function resolveModel(agent) {
   return fallback;
 }
 
+// Auto-generate a system prompt from hierarchy when the agent has none set
+function buildAutoSystemPrompt(agent, allAgents) {
+  const name = agent.name;
+  const role = agent.role ? ` (${agent.role})` : "";
+  const directReports = allAgents.filter((a) => a.managerId === agent.id);
+  const manager = agent.managerId ? allAgents.find((a) => a.id === agent.managerId) : null;
+
+  if (directReports.length > 0) {
+    const reportNames = directReports.map((r) => `${r.name}${r.role ? ` (${r.role})` : ""}`).join(", ");
+    return `You are ${name}${role}. You lead a team and delegate work to your direct reports: ${reportNames}.
+
+When given a task, break it down and assign each part to the right team member using [A2A:Name:task].
+After they complete their work, read their output using read_file and write a final summary confirming everything is done.
+Never do your team's work yourself — delegate and verify.`;
+  }
+
+  const managerLine = manager ? ` You report to ${manager.name}${manager.role ? ` (${manager.role})` : ""}.` : "";
+  return `You are ${name}${role}.${managerLine}
+
+When assigned a task, complete it using the tools available (write_file, read_file, bash, web_search, etc.).
+Always actually execute the work — don't just describe what you would do.
+Report back clearly with what you did and what files or output were created.`;
+}
+
 // Build hierarchy-aware context injected into every agent's system prompt
 function buildAgentContext(currentAgent, allAgents) {
   const others = allAgents.filter((a) => a.id !== currentAgent.id);
@@ -204,7 +228,7 @@ async function llmCall(model, messages, useTools, thinkingBudget = 0) {
 async function callAgentLLM(agent, userContent, allAgents, history = [], officeId = "") {
   const model = await resolveModel(agent);
   const agentContext = buildAgentContext(agent, allAgents);
-  const systemContent = (agent.systemPrompt || "") + agentContext;
+  const systemContent = (agent.systemPrompt || buildAutoSystemPrompt(agent, allAgents)) + agentContext;
 
   const messages = [];
   if (systemContent.trim()) messages.push({ role: "system", content: systemContent });
