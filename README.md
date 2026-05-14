@@ -6,6 +6,7 @@
 
   **A living, breathing AI workspace where agents collaborate, delegate tasks, write code, and think together — in real time.**
 
+  [![GitHub stars](https://img.shields.io/github/stars/GodrezJr2/Agent-to-Agent?style=social)](https://github.com/GodrezJr2/Agent-to-Agent/stargazers)
   [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
   [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
   [![A2A Protocol](https://img.shields.io/badge/A2A-Protocol-6f42c1)](https://google.github.io/A2A/)
@@ -15,6 +16,28 @@
   [✨ Features](#-features) • [🚀 Quick Start](#-quick-start) • [🤖 How Agents Talk](#-how-agents-talk-to-each-other) • [🛠️ Tools](#-agent-tools) • [📡 A2A Protocol](#-a2a-protocol) • [🧪 Tested Models](#-tested-models)
 
 </div>
+
+---
+
+## ✅ Proof it works
+
+Real SSE output from a live test — Thinker delegates to Kevin, Kevin writes a file:
+
+```
+→ Calling: Thinker
+  Thinker: *(asking Kevin...)*
+
+→ Calling: Kevin
+  > 🔧 write_file({"path":"test.txt","content":"hello from kevin"}) → File written: test.txt
+  > 📖 read_file({"path":"test.txt"}) → Content: "hello from kevin"
+```
+
+```bash
+$ cat /workspaces/Office\ 1/test.txt
+hello from kevin  ✅
+```
+
+The file is **actually on disk**. Agents don't simulate tool use — they execute it.
 
 ---
 
@@ -76,7 +99,13 @@ cp .env.example .env       # set JWT_SECRET and INITIAL_PASSWORD
 docker compose up -d
 ```
 
-Open **http://localhost:20128** → log in → create an Office → add Agents → start chatting.
+Open **http://localhost:20128** → log in (default password: `123456`) → **Offices** → **New Office** → **Add Agent** → type `@AgentName` in the chat.
+
+**First thing to try:**
+```
+@Thinker tell Kevin to write a file called hello.txt with content "it works"
+```
+Watch Thinker delegate to Kevin, Kevin write the file, and find it in your `./workspaces/` folder.
 
 ### From Source
 
@@ -247,6 +276,21 @@ This project takes that idea further: instead of VS Code terminals, agents live 
 - **Research Squad** — Agents browse the web, synthesize findings, write reports to your folder
 - **Autonomous Automation** — Use `schedule_task` for nightly agents that check APIs, run tests, generate reports
 - **Model A/B Testing** — Assign different LLMs to each agent and compare their approaches side-by-side
+
+---
+
+## 🆚 How it compares
+
+| Feature | This project | Agent Office | Pixel Agents | A2A demos |
+|---------|-------------|--------------|--------------|-----------|
+| Pixel art office UI | ✅ | ✅ | ✅ VS Code only | ❌ |
+| Real A2A protocol (JSON-RPC 2.0) | ✅ | ❌ | ❌ | ✅ spec only |
+| Agents call each other | ✅ | ✅ | ❌ | ✅ |
+| Real file write/bash via delegation | ✅ | ✅ | ❌ | ❌ |
+| 40+ LLM providers + fallback | ✅ 9Router | ❌ | ❌ | ❌ |
+| Free models (no API key needed) | ✅ OpenRouter | ❌ | ❌ | ❌ |
+| Self-hosted Docker, no IDE | ✅ | ❌ | ❌ VS Code req | ❌ |
+| External agents can call yours | ✅ A2A compliant | ❌ | ❌ | ✅ |
 
 ---
 
