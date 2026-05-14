@@ -55,11 +55,13 @@ async function callAgentLLM(agent, taskMessage, { fromAgent, officeHistory, allA
       if (msg.role === "user") {
         messages.push({ role: "user", content: msg.content });
       } else if (msg.role === "agent") {
+        const cleaned = msg.content.replace(/\*\(asking [^)]+\.\.\.\)\*/g, "").trim();
+        if (!cleaned) continue;
         const name = allAgents?.find((a) => a.id === msg.agentId)?.name || "Agent";
         if (msg.agentId === agent.id) {
-          messages.push({ role: "assistant", content: msg.content });
+          messages.push({ role: "assistant", content: cleaned });
         } else {
-          messages.push({ role: "user", content: `[${name} said]: ${msg.content}` });
+          messages.push({ role: "user", content: `[${name} said]: ${cleaned}` });
         }
       }
     }

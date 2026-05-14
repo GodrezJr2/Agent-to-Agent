@@ -1,0 +1,18 @@
+name: agent-to-agent
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      HOSTNAME: 0.0.0.0
+      DATA_DIR: /app/data
+    ports:
+      - "20128:20128"
+    volumes:
+      - ./data:/app/data
+      - ./workspaces:/workspaces
+    restart: unless-stopped
