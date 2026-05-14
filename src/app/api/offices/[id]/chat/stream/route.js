@@ -73,13 +73,15 @@ function buildAgentContext(currentAgent, allAgents) {
     for (const r of directReports) {
       lines.push(`  - ${r.name}${r.role ? ` (${r.role})` : ""}`);
     }
-    lines.push(`\nTo assign a task to a direct report, write [A2A:AgentName:task description] in your reply. The system will call them and inject their response automatically.`);
+    lines.push(`\nTo assign a task to a direct report, you MUST write exactly: [A2A:AgentName:task description]`);
+    lines.push(`CRITICAL: Always use [A2A:Name:task] format to delegate. NEVER write *(asking ...)* — that is internal UI text, not a delegation command.`);
   } else if (others.length > 0) {
     lines.push(`\nYour colleagues:`);
     for (const a of others) {
       lines.push(`  - ${a.name}${a.role ? ` (${a.role})` : ""}`);
     }
-    lines.push(`\nTo delegate to a colleague, write [A2A:AgentName:task] in your reply.`);
+    lines.push(`\nTo delegate to a colleague, you MUST write exactly: [A2A:AgentName:task]`);
+    lines.push(`CRITICAL: Always use [A2A:Name:task] format. NEVER write *(asking ...)* — that is internal UI text, not a delegation command.`);
   }
 
   return `\n\n---\n${lines.join("\n")}`;
@@ -127,13 +129,14 @@ function buildHistoryMessages(history, currentAgent, allAgents) {
     if (msg.role === "user") {
       llmMessages.push({ role: "user", content: msg.content });
     } else if (msg.role === "agent") {
+      // Strip *(asking X...)* UI artifacts from history so the LLM doesn't copy that pattern
+      const cleanedContent = msg.content.replace(/\*\(asking [^)]+\.\.\.\)\*/g, "").trim();
+      if (!cleanedContent) continue;
       if (msg.agentId === currentAgent.id) {
-        // This agent's own previous reply → assistant turn
-        llmMessages.push({ role: "assistant", content: msg.content });
+        llmMessages.push({ role: "assistant", content: cleanedContent });
       } else {
-        // Another agent's reply → inject as a user turn so LLM sees it
         const otherName = allAgents.find((a) => a.id === msg.agentId)?.name || "Agent";
-        llmMessages.push({ role: "user", content: `[${otherName} said]: ${msg.content}` });
+        llmMessages.push({ role: "user", content: `[${otherName} said]: ${cleanedContent}` });
       }
     }
     // skip "system" role messages (routing info, errors)
