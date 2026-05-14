@@ -27,14 +27,10 @@ export async function OPTIONS() {
   });
 }
 
-export async function POST(request) {
+export async function POST(request) {  
   // Fallback to local handling
   await ensureInitialized();
-
-  const result = await handleChat(request);
-  if (result && result.response instanceof Response) {
-    return result.response;
-  }
-  return result;
+  
+  return await handleChat(request);
 }
 

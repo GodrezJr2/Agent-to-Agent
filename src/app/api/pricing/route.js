@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getPricing, updatePricing, resetPricing, resetAllPricing } from "@/lib/localDb.js";
+import { getDefaultPricing } from "@/shared/constants/pricing.js";
 
 /**
  * GET /api/pricing
@@ -110,6 +111,23 @@ export async function DELETE(request) {
     console.error("Error resetting pricing:", error);
     return NextResponse.json(
       { error: "Failed to reset pricing" },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * GET /api/pricing/defaults
+ * Get default pricing configuration
+ */
+export async function GET_DEFAULTS() {
+  try {
+    const defaultPricing = getDefaultPricing();
+    return NextResponse.json(defaultPricing);
+  } catch (error) {
+    console.error("Error fetching default pricing:", error);
+    return NextResponse.json(
+      { error: "Failed to fetch default pricing" },
       { status: 500 }
     );
   }

@@ -33,9 +33,5 @@ export async function POST(request) {
     headers: request.headers,
     body: JSON.stringify(body)
   });
-  const result = await handleChat(newRequest);
-  if (result && result.response instanceof Response) {
-    return result.response;
-  }
-  return result;
+  return await handleChat(newRequest);
 }
