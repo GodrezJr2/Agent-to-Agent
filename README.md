@@ -1,175 +1,209 @@
 <div align="center">
-  <img src="./images/office.png" alt="Agent Office Dashboard" width="1000"/>
-  
-  # 🏢 Agent-to-Agent (A2A) Office
-  
-  **Stop talking to a blank chatbox. Step into a living, breathing 2D digital workspace where your AI agents collaborate, move, write code, and think together.**
-  
+
+  <img src="./images/office-preview.png" alt="Agent-to-Agent Office" width="900"/>
+
+  # 🏢 Agent-to-Agent Office
+
+  **A living, breathing AI workspace where agents collaborate, delegate tasks, write code, and think together — in real time.**
+
   [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-  
-  [🚀 Quick Start](#-quick-start) • [✨ Killer Features](#-killer-features) • [🛋️ Custom Workspaces](#-unlimited-custom-workspaces) • [👑 Role Hierarchy](#-agent-role-hierarchy)
+  [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
+  [![Powered by 9Router](https://img.shields.io/badge/Powered%20by-9Router-orange)](https://github.com/decolua/9router)
+
+  [✨ Features](#-features) • [🚀 Quick Start](#-quick-start) • [🤖 How Agents Talk](#-how-agents-talk-to-each-other) • [🛠️ Tools](#-agent-tools) • [🧪 Tested Models](#-tested-models)
+
 </div>
 
 ---
 
 ## 🤔 What is this?
 
-**Agent-to-Agent Office** is a revolutionary approach to AI interaction. We took the robust LLM routing engine of **9Router**, combined it with a retro 2D pixel-art environment, and added advanced multi-agent communication logic.
+Instead of chatting with a single AI, you manage a **team of AI agents** dropped into a retro pixel-art office. Each agent has a name, a role, a personality, and a desk. They talk to each other, delegate tasks, run code, read and write files — all visible in real-time.
 
-Instead of sending prompts into a void, you hire a team of AI agents, drop them into a virtual office, and watch them work. They have desks, they walk around, they brainstorm in the lounge, and they talk to *each other* to solve your complex problems.
+Built on top of [9Router](https://github.com/decolua/9router)'s battle-tested LLM routing engine, this project adds a full multi-agent orchestration layer with the [A2A protocol](https://google.github.io/A2A/).
 
 ---
 
-## ✨ Killer Features
+## ✨ Features
 
-### 🛠️ Agent Sandbox Workspace
-Your agents aren't just chatting; they have their own secure workspace filesystem to actually build things for you. Agents come equipped with tools to:
-- **`bash`**: Run terminal commands, compile code, and install packages.
-- **`read_file` / `write_file` / `list_dir`**: Read and modify the codebase in real-time.
-- **`web_search` & `fetch_url`**: Browse the live internet for documentation and current events.
-- **`remember` / `recall` / `schedule_task`**: Agents have persistent memory and can schedule their own cron jobs to run autonomously in the future.
+### 🤖 True Agent-to-Agent Delegation
+Agents don't just chat — they actually **call each other**. When a manager agent needs something done, it delegates via `[A2A:AgentName:task]` and the target agent runs its own LLM, executes tools, and replies as a separate bubble.
 
-### 👑 Agent Role Hierarchy
-Not all agents are created equal. You can assign specific roles and hierarchies to your digital team:
-- **The Manager**: Takes your high-level prompt, breaks it down into sub-tasks, and delegates it to the right team members.
-- **The Specialists** (Developers, Designers, Thinkers): Receive delegated tasks, execute them using their specialized system prompts, and report back.
-- **Peer-to-Peer Review**: Watch agents debate and review each other's code and ideas in real-time before presenting the final result to you.
+```
+You → @Thinker: tell Kevin to write a summary report
+Thinker → [delegates] → Kevin → writes report.md → reports back
+```
 
-### 🛋️ Unlimited Custom Workspaces
-Every project deserves its own vibe. You aren't limited to a single room:
-- **Multiple Offices / Workspaces**: Create unlimited, isolated office instances. Bind an office to a specific local folder (`workspacePath`) so agents can directly edit your real project files safely!
-- **Interactive Layout Editor**: Drag and drop furniture, build walls, change floor tiles, and design the ultimate productivity space.
-- **Dynamic Assets**: The engine dynamically loads pixel-art assets (plants, coffee machines, computers, couches) at runtime.
+### 🛠️ Real Tool Execution
+Agents don't *pretend* to use tools. They actually:
+- **Write and read files** on your filesystem
+- **Run bash commands** inside the workspace
+- **Search the web** for live information
+- **Remember facts** persistently across sessions
+- **Schedule cron tasks** to run autonomously later
 
-### 💬 The "Watercooler" Group Chat
-- **Unified A2A Chat**: A master chat interface where you can talk to the whole room.
-- **Direct Mentions**: Use `@AgentName` to pull a specific agent into focus while the rest of the room listens for context.
-- **Overheard Conversations**: Read the internal dialogues as agents collaborate autonomously.
+### 👑 Org Chart Hierarchy
+Assign managers and direct reports. Agents know who they report to, who they can delegate to, and who their peers are — context is injected automatically into every prompt.
 
-### 🧠 Powered by 9Router (40+ LLMs)
-- **Universal API**: Connect your agents to OpenAI, Anthropic, Gemini, DeepSeek, or local Ollama models.
-- **Cost-Effective**: Built-in RTK token saving compresses inputs, saving you 20-40% on API costs.
-- **Smart Fallbacks**: If your premium Claude API hits a rate limit, the router automatically fails over to a cheaper model without interrupting the agents' workflow.
+### 🛋️ Pixel Art Office
+A fully interactive 2D office you can customize:
+- Place agents at desks, in meeting rooms, the lounge
+- Drag and drop furniture
+- Multiple office layouts per project
 
-### 🗂️ Docker Workspace Setup
+### 💬 @Mention Routing
+```
+@Kevin write the landing page HTML
+@Thinker review Kevin's work and give feedback
+```
+Direct a specific agent or broadcast to everyone.
 
-Agents run tools (bash, write_file, read_file) inside the container. Mount a host directory so output files persist:
+### ⚡ 40+ LLM Providers via 9Router
+Connect agents to OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter, local Ollama — with automatic fallback if one fails.
+
+---
+
+## 🚀 Quick Start
+
+### Docker (recommended)
+
+```bash
+git clone https://github.com/GodrezJr2/Agent-to-Agent.git
+cd Agent-to-Agent
+cp .env.example .env       # set JWT_SECRET and INITIAL_PASSWORD
+docker compose up -d
+```
+
+Open **http://localhost:20128** → log in → create an Office → add Agents → start chatting.
+
+### From Source
+
+```bash
+npm install
+npm run build
+npm start
+```
+
+---
+
+## 🤖 How Agents Talk to Each Other
+
+When an agent wants to delegate, it writes a tag in its reply:
+
+```
+[A2A:Kevin:write a file called report.md with a project summary]
+```
+
+The system intercepts this, calls Kevin's A2A endpoint (`/api/agents/{id}/a2a`), Kevin runs its own LLM with full tool access and office history, and the response appears as Kevin's own bubble in the chat.
+
+The UI shows `*(asking Kevin...)*` while the delegation is in-flight.
+
+---
+
+## 🛠️ Agent Tools
+
+Every agent has access to these tools out of the box:
+
+| Tool | What it does |
+|------|-------------|
+| `write_file` | Write a file to the office workspace |
+| `read_file` | Read any file from the workspace |
+| `list_dir` | List files and folders |
+| `bash` | Run shell commands |
+| `web_search` | Search the web |
+| `fetch_url` | Fetch content from a URL |
+| `remember` | Store a key-value fact persistently |
+| `recall` | Retrieve a stored fact |
+| `grep_file` | Search inside files |
+| `delete_file` | Delete a file |
+| `generate_file` | Generate a file with AI-written content |
+| `schedule_task` | Schedule a cron job for future autonomous execution |
+
+---
+
+## 🧪 Tested Models
+
+All models below confirmed working with tool use and A2A delegation:
+
+| Model | Provider | Notes |
+|-------|----------|-------|
+| `openrouter/openai/gpt-oss-120b:free` | OpenRouter | Best free model — sharp, reliable |
+| `openrouter/nvidia/nemotron-3-super-120b-a12b:free` | OpenRouter | Strong free option |
+| `openrouter/minimax-m2.5:free` | OpenRouter | Fast, good for simple tasks |
+| `openrouter/z-ai/glm-4.5-air:free` | OpenRouter | Solid bilingual |
+| `kr/claude-sonnet-4.5` | Kiro AI | Reliable Anthropic |
+| `kr/deepseek-3.2` | Kiro AI | Strong coding |
+| `ocg/deepseek-v4-pro` | OpenCode Go | Best for reasoning |
+| `ocg/kimi-k2.6` | OpenCode Go | Long context |
+
+**You can run a full multi-agent team for free using OpenRouter free models.**
+
+---
+
+## 🔧 Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `20128` | Server port |
+| `JWT_SECRET` | — | **Required.** Auth cookie signing secret |
+| `INITIAL_PASSWORD` | `123456` | Dashboard login password |
+| `DATA_DIR` | `~/.9router/` | SQLite database location |
+| `API_KEY_SECRET` | — | Local API key generation secret |
+
+---
+
+## 🐳 Docker Workspace
+
+Agents run tools inside the container. Mount a host directory to persist output files:
 
 ```yaml
 # docker-compose.yml
-services:
-  app:
-    volumes:
-      - /your/host/path/workspaces:/workspaces
+volumes:
+  - /your/host/path/workspaces:/workspaces
 ```
 
-Set each Office's **Workspace Path** to the container path (e.g. `/workspaces/My Project`), not the host path.
+Set each Office's **Workspace Path** in settings to the container path (e.g. `/workspaces/my-project`).
+
+---
+
+## 📐 Architecture
+
+```
+User message
+    ↓
+@mention routing → target agent(s)
+    ↓
+callAgentLLM (stream route)
+  → tool-use loop (up to 6 iterations)
+  → parse [A2A:Name:task] tags
+    ↓
+callAgentA2A → POST /api/agents/{id}/a2a (JSON-RPC 2.0)
+  → target agent runs own LLM + tool-use loop
+  → result streamed back as separate bubble
+```
+
+Each agent also exposes a standard A2A discovery card:
+```
+GET /api/agents/{id}/.well-known/agent.json
+```
 
 ---
 
 ## 💡 Use Cases
 
-- **Software Team in a Box** — Manager agent breaks your feature into tasks, Developer agents write code in the workspace, Reviewer agent checks the diff. All visible in real-time.
-
-- **Research Squad** — Agents with `web_search` + `fetch_url` browse the internet, synthesize findings, and write reports directly to your workspace folder.
-
-- **AI Roleplay / Dungeon Master** — Give each agent a personality and role (Wizard, Rogue, Merchant). They talk to each other while you steer the story with `@mentions`.
-
-- **Cron Automation** — Use `schedule_task` to have agents run nightly: check APIs, generate reports, run tests. Agents have persistent memory across sessions.
-
-- **Model A/B Testing** — Assign different models to agents in one office, give them the same task, and watch how each approaches it differently.
+- **Software Team in a Box** — Manager breaks features into tasks, Developer writes code, Reviewer checks the diff
+- **Research Squad** — Agents browse the web, synthesize findings, write reports to your folder
+- **Autonomous Automation** — Use `schedule_task` for nightly agents that check APIs, run tests, generate reports
+- **Model A/B Testing** — Assign different LLMs to each agent and compare their approaches side-by-side
 
 ---
 
-## 🧪 Community-Tested Models
+## 🙏 Credits
 
-Tested via 9Router API (`/v1/chat/completions` with `tools` param). All models below successfully executed agent tool calls (write_file, bash, web_search, etc.):
-
-| Model | Provider | Notes |
-|-------|----------|-------|
-| `openrouter/openai/gpt-oss-120b:free` | OpenRouter | Best free model — 120B, sharp responses, zero API key |
-| `openrouter/nvidia/nemotron-3-super-120b-a12b:free` | OpenRouter | Strong performance, free |
-| `openrouter/minimax-m2.5:free` | OpenRouter | Fast, good for simple tasks |
-| `openrouter/z-ai/glm-4.5-air:free` | OpenRouter | Solid Chinese/English bilingual |
-| `kr/claude-sonnet-4.5` | Kiro AI | Reliable Anthropic model |
-| `kr/deepseek-3.2` | Kiro AI | Strong coding performance |
-| `kr/qwen3-coder-next` | Kiro AI | Coding specialist |
-| `ocg/deepseek-v4-pro` | OpenCode Go | Recommended for reasoning tasks |
-| `ocg/kimi-k2.6` | OpenCode Go | Long context, good memory |
-| `ocg/glm-5.1` | OpenCode Go | Strong multilingual |
-
-**7 of 7 tested free OpenRouter models support tool calling.** Your agents can work at zero cost.
+Built on top of [9Router](https://github.com/decolua/9router) by [@decolua](https://github.com/decolua) — the best open-source AI router out there.
 
 ---
 
-## ⚡ Quick Start (Docker Compose)
+## License
 
-Deploy your virtual office in 3 minutes flat.
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/GodrezJr2/Agent-to-Agent.git
-cd Agent-to-Agent
-
-# 2. Setup Environment
-cp .env.example .env
-# Edit .env to set your INITIAL_PASSWORD and JWT_SECRET
-
-# 3. Start the application
-docker compose up -d
-```
-
-The workspace will be available at `http://localhost:20128`.
-
----
-
-## 🔧 Running from Source
-
-```bash
-# Install dependencies
-npm install
-
-# Build the Next.js application
-npm run build
-
-# Start the server
-npm run start
-```
-
----
-
-## 🎨 Customizing the Game Assets
-
-You can deeply customize the visual look of your office by modifying the assets in the `public/assets/` directory.
-
-- **Furniture**: Add new pixel-art furniture by placing PNG sprites and a `manifest.json` inside `public/assets/furniture/<ITEM_NAME>/`.
-- **Characters**: Replace agent avatars by updating the sprite sheets in `public/assets/characters/`. Each character sheet requires specific walk/type/read animation frames.
-- **Floors & Walls**: Add new tilesets to `public/assets/floors/` and `public/assets/walls/`.
-
----
-
-## 🔐 Environment Variables & Privacy
-
-**This project is Local-First.** Your chats, office layouts, and databases are stored locally in SQLite. No data is sent to central tracking servers.
-
-Key variables in `.env`:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `JWT_SECRET` | `change-me` | Secret for signing auth cookies. **Must change.** |
-| `INITIAL_PASSWORD` | `123456` | Default login password. **Must change.** |
-| `DATABASE_URL` | `file:./data/data.sqlite` | Path to the SQLite database. |
-| `API_KEY_SECRET` | `change-me` | Secret for local API key generation. |
-| `NEXT_PUBLIC_BASE_URL` | `http://localhost:20128` | The URL the app is accessed from. |
-
----
-
-## 🙏 Attributions & Open Source Credits
-
-This project stands on the shoulders of giants and is a combination of several incredible open-source repositories:
-
-- **[9Router](https://github.com/decolua/9router)**: Provided the robust LLM routing backend, provider management, RTK token saving, and the base dashboard UI framework.
-- **[pixel-agents](https://github.com/pablodelucca/pixel-agents)**: Provided the beautiful 2D pixel-art assets, character sprites, and isometric office environment inspiration.
-- **[A2A (Agent-to-Agent)](https://github.com/a2aproject/A2A)**: Inspired the multi-agent communication architecture and group chat interaction flows.
-
-This project is licensed under the MIT License. See the `THIRD_PARTY_NOTICES.md` and `LICENSE` files for detailed license information and copyrights of the upstream projects.
+MIT
