@@ -373,7 +373,7 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
   }
 
   return (
-    <div className="flex flex-col h-full" style={{ background: "#0f0f17", borderLeft: "1px solid #1f1f2e" }}>
+    <div className="flex flex-col h-full min-h-0 overflow-hidden" style={{ background: "#0f0f17", borderLeft: "1px solid #1f1f2e" }}>
       {/* Header */}
       <div style={{ padding: "10px 14px", borderBottom: "1px solid #1f1f2e", display: "flex", alignItems: "center", gap: 8 }}>
         <div style={{ width: 8, height: 8, borderRadius: "50%", background: sending ? "#4ade80" : "#374151", transition: "background 0.3s", boxShadow: sending ? "0 0 6px #4ade80" : "none" }} />
@@ -382,7 +382,7 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto" style={{ padding: "12px 10px", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: "12px 10px", display: "flex", flexDirection: "column", gap: 10 }}>
         {loading && (
           <div style={{ color: "#4b5563", fontSize: 12, textAlign: "center", marginTop: 20 }}>Loading...</div>
         )}

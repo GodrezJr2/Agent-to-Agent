@@ -76,7 +76,7 @@ export async function loadFurnitureCatalog(): Promise<boolean> {
   try {
     const res = await fetch('/api/furniture-catalog');
     if (!res.ok) return false;
-    const { catalog } = await res.json() as { catalog: LoadedAssetData['catalog'] & Array<{ url: string }> };
+    const { catalog } = await res.json() as { catalog: Array<LoadedAssetData['catalog'][0] & { url: string }> };
 
     // Load all PNG sprites in parallel
     const sprites: Record<string, SpriteData> = {};

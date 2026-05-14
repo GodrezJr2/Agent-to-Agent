@@ -16,7 +16,7 @@ function jsonRpcResult(id, result) {
 
 async function resolveModel(agent) {
   if (agent.modelId) {
-    return agent.modelId.startsWith("openrouter/") ? agent.modelId : `openrouter/${agent.modelId}`;
+    return agent.modelId;
   }
   if (agent.comboId) {
     try {

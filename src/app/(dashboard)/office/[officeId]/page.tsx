@@ -434,6 +434,25 @@ export default function OfficePage() {
   const setAgentActive = useOfficeStore((s) => s.setAgentActive);
   const setAgentIdle = useOfficeStore((s) => s.setAgentIdle);
 
+  // Prevent browser-level zoom (Ctrl+scroll / pinch) on the entire office page
+  // so only the canvas zoom is used — chat panel stays fixed size.
+  useEffect(() => {
+    const preventBrowserZoom = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) e.preventDefault();
+    };
+    const preventKeyZoom = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '-' || e.key === '=' || e.key === '0')) {
+        e.preventDefault();
+      }
+    };
+    document.addEventListener('wheel', preventBrowserZoom, { passive: false });
+    document.addEventListener('keydown', preventKeyZoom);
+    return () => {
+      document.removeEventListener('wheel', preventBrowserZoom);
+      document.removeEventListener('keydown', preventKeyZoom);
+    };
+  }, []);
+
   async function loadAgents() {
     try {
       const res = await fetch(`/api/offices/${officeId}/agents`);
@@ -535,7 +554,7 @@ export default function OfficePage() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gray-900">
+    <div className="flex flex-col h-full bg-gray-900">
       {showAddModal && <AddAgentModal officeId={officeId} onClose={() => setShowAddModal(false)} onCreated={loadAgents} />}
       {editingAgent && <EditAgentModal officeId={officeId} agent={editingAgent} allAgents={agents} onClose={() => setEditingAgent(null)} onUpdated={loadAgents} />}
       {showSettings && (
@@ -620,16 +639,16 @@ export default function OfficePage() {
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         {showOrgPanel && (
           <div className="w-52 flex-shrink-0">
             <OrgPanel agents={agents} onEdit={(a) => setEditingAgent(a)} />
           </div>
         )}
-        <div className="flex-1 relative min-w-0">
+        <div className="flex-1 relative min-w-0 min-h-0 overflow-hidden">
           <OfficeCanvas onAgentClick={(id) => { const a = agents.find(x => x.id === id); if (a) setEditingAgent(a); }} />
         </div>
-        <div className="w-80 flex-shrink-0 border-l border-gray-800">
+        <div className="w-80 h-full min-h-0 flex-shrink-0 overflow-hidden border-l border-gray-800">
           <ChatPanel officeId={officeId} agents={agents} onAgentActivity={handleAgentActivity} />
         </div>
       </div>

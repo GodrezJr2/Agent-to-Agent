@@ -349,9 +349,17 @@ export async function GET(request, { params }) {
             // Process each delegation as a SEPARATE bubble for the target agent
             for (const d of delegations) {
               const target = allAgents.find(
-                (a) => a.name.toLowerCase() === d.agentName.toLowerCase() && a.id !== agent.id
+                (a) => a.id !== agent.id && (
+                  a.name.toLowerCase() === d.agentName.toLowerCase() ||
+                  a.name.toLowerCase().includes(d.agentName.toLowerCase()) ||
+                  d.agentName.toLowerCase().includes(a.name.toLowerCase())
+                )
               );
-              if (!target) continue;
+              if (!target) {
+                console.warn(`[A2A][${agent.name}] delegation target "${d.agentName}" not found in office`);
+                send({ type: "agent_error", agentId: agent.id, error: `Delegation target "${d.agentName}" not found` });
+                continue;
+              }
 
               console.log(`[A2A][${agent.name}] → ${target.name}: "${d.message}"`);
               send({ type: "agent_start", agentId: target.id, agentName: target.name });

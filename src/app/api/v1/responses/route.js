@@ -26,5 +26,9 @@ export async function OPTIONS() {
  */
 export async function POST(request) {
   await ensureInitialized();
-  return await handleChat(request);
+  const result = await handleChat(request);
+  if (result && result.response instanceof Response) {
+    return result.response;
+  }
+  return result;
 }

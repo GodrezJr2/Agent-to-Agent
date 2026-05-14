@@ -9,11 +9,20 @@ import { useOfficeStore } from "../engine/officeStore";
 import { loadAllAssets } from "../assetLoader";
 import { migrateLayoutColors } from "../layout/layoutSerializer";
 
-const ZOOM_MIN = 0.5;
+const ZOOM_MIN = 1;
 const ZOOM_MAX = 8;
-const ZOOM_FACTOR_IN = 1.14;
-const ZOOM_FACTOR_OUT = 0.88;
+const ZOOM_FIT_PADDING = 0.92;
 const DRAG_THRESHOLD_PX = 4;
+
+function clampZoom(zoom: number): number {
+  return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom));
+}
+
+function snapZoom(zoom: number, mode: 'floor' | 'nearest' = 'nearest'): number {
+  const clamped = clampZoom(zoom);
+  const snapped = mode === 'floor' ? Math.floor(clamped) : Math.round(clamped);
+  return clampZoom(snapped);
+}
 
 export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -52,7 +61,28 @@ export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string
           officeStateRef.current.addAgent(numId);
           officeStateRef.current.setAgentActive(numId, char.active);
         }
-        zoomRef.current = Math.round(ZOOM_DEFAULT_DPR_FACTOR * (window.devicePixelRatio || 1));
+        // Auto-fit: wait one frame so canvas has real dimensions, then
+        // compute a zoom level that makes the full map visible.
+        requestAnimationFrame(() => {
+          resizeCanvas();
+          const canvas = canvasRef.current;
+          const state = officeStateRef.current;
+          if (canvas && state) {
+            const l = state.getLayout();
+            const mapW = l.cols * TILE_SIZE;
+            const mapH = l.rows * TILE_SIZE;
+            // Fit map into the viewport, snapping down to an integer pixel scale.
+            // Fractional zoom makes pixel-art sprites/floors shimmer with grid artifacts.
+            const fitZoom = Math.min(
+              (canvas.width * ZOOM_FIT_PADDING) / mapW,
+              (canvas.height * ZOOM_FIT_PADDING) / mapH,
+            );
+            zoomRef.current = snapZoom(fitZoom, 'floor');
+          } else {
+            zoomRef.current = Math.round(ZOOM_DEFAULT_DPR_FACTOR * (window.devicePixelRatio || 1));
+          }
+          panRef.current = { x: 0, y: 0 };
+        });
       })
       .catch(() => {
         officeStateRef.current = new OfficeState();
@@ -114,7 +144,7 @@ export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string
     const canvas = canvasRef.current;
     const state = officeStateRef.current;
     if (!canvas || !state) return;
-    const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, newZoom));
+    const clamped = snapZoom(newZoom);
     const oldZoom = zoomRef.current;
     // World point under cursor (using current offset)
     const worldX = (screenX - offsetRef.current.x) / oldZoom;
@@ -233,18 +263,33 @@ export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string
     return () => { stop(); observer.disconnect(); };
   }, [resizeCanvas]);
 
-  // Smooth zoom toward cursor
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const screenX = (e.clientX - rect.left) * dpr;
-    const screenY = (e.clientY - rect.top) * dpr;
-    const factor = e.deltaY > 0 ? ZOOM_FACTOR_OUT : ZOOM_FACTOR_IN;
-    applyZoom(zoomRef.current * factor, screenX, screenY);
-  }, [applyZoom]);
+  // Smooth zoom toward cursor — uses native listener (passive: false) so
+  // preventDefault() actually works and browser-level Ctrl+scroll zoom is blocked.
+  const handleWheelRef = useRef(applyZoom);
+  handleWheelRef.current = applyZoom;
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault(); // block native scroll AND browser Ctrl+scroll zoom
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const screenX = (e.clientX - rect.left) * dpr;
+      const screenY = (e.clientY - rect.top) * dpr;
+      // Ctrl+scroll (browser zoom gesture) or pinch → treat as zoom
+      // Normal scroll → also zoom (this is a canvas, not a scrollable page)
+      const delta = e.ctrlKey ? e.deltaY * 3 : e.deltaY; // pinch gives small deltas
+      const nextZoom = zoomRef.current + (delta > 0 ? -1 : 1);
+      handleWheelRef.current(nextZoom, screenX, screenY);
+    };
+
+    container.addEventListener('wheel', onWheel, { passive: false });
+    return () => container.removeEventListener('wheel', onWheel);
+  }, []);
 
   // Left or middle mouse starts pan
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -325,19 +370,32 @@ export function OfficeCanvas({ onAgentClick }: { onAgentClick?: (agentId: string
 
   const handleZoomBtn = useCallback((dir: 1 | -1) => {
     const center = canvasScreenCenter();
-    applyZoom(zoomRef.current * (dir > 0 ? ZOOM_FACTOR_IN : ZOOM_FACTOR_OUT), center.x, center.y);
+    applyZoom(zoomRef.current + dir, center.x, center.y);
   }, [applyZoom, canvasScreenCenter]);
 
   const handleZoomReset = useCallback(() => {
-    const center = canvasScreenCenter();
-    applyZoom(2 * (window.devicePixelRatio || 1), center.x, center.y);
-  }, [applyZoom, canvasScreenCenter]);
+    const canvas = canvasRef.current;
+    const state = officeStateRef.current;
+    if (canvas && state) {
+      const l = state.getLayout();
+      const mapW = l.cols * TILE_SIZE;
+      const mapH = l.rows * TILE_SIZE;
+      const fitZoom = Math.min(
+        (canvas.width * ZOOM_FIT_PADDING) / mapW,
+        (canvas.height * ZOOM_FIT_PADDING) / mapH,
+      );
+      zoomRef.current = snapZoom(fitZoom, 'floor');
+    } else {
+      zoomRef.current = 2 * (window.devicePixelRatio || 1);
+    }
+    panRef.current = { x: 0, y: 0 };
+    showZoom();
+  }, [showZoom]);
 
   const storeChars = useOfficeStore(s => s.characters);
 
   return (
     <div ref={containerRef} className="w-full h-full relative bg-[#0d0d1a]"
-      onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}

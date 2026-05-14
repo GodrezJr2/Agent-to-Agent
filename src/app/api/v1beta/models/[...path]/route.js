@@ -87,7 +87,8 @@ export async function POST(request, { params }) {
       body: JSON.stringify(convertedBody),
     });
 
-    const response = await handleChat(newRequest);
+    const result = await handleChat(newRequest);
+    const response = (result && result.response instanceof Response) ? result.response : result;
 
     if (stream) {
       // Transform OpenAI SSE => Gemini SSE on the fly.

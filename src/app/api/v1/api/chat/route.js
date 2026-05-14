@@ -31,7 +31,8 @@ export async function POST(request) {
     modelName = body.model || "llama3.2";
   } catch {}
 
-  const response = await handleChat(request);
+  const result = await handleChat(request);
+  const response = (result && result.response instanceof Response) ? result.response : result;
   return transformToOllama(response, modelName);
 }
 

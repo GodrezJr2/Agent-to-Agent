@@ -1,0 +1,767 @@
+From 56ba892b012218b4bfe3e9202ca0c3cfde2ffc39 Mon Sep 17 00:00:00 2001
+From: toanalien <toanalien@gmail.com>
+Date: Tue, 12 May 2026 14:58:11 +0700
+Subject: [PATCH] feat: add minimax tts support
+
+---
+ .../handlers/ttsProviders/genericFormats.js   |   2 +
+ open-sse/handlers/ttsProviders/minimax.js     |  59 +++++++++
+ open-sse/services/usage.js                    |  82 ++++++++----
+ .../media-providers/[kind]/[id]/page.js       |   4 +-
+ .../tts/minimax/voices/route.js               | 113 +++++++++++++++++
+ src/shared/constants/providers.js             |  15 ++-
+ src/shared/constants/ttsProviders.js          |  16 +++
+ tests/unit/minimax-tts.test.js                | 120 ++++++++++++++++++
+ tests/unit/minimax-usage.test.js              | 116 +++++++++++++++++
+ tests/unit/minimax-voices.test.js             |  83 ++++++++++++
+ 10 files changed, 578 insertions(+), 32 deletions(-)
+ create mode 100644 open-sse/handlers/ttsProviders/minimax.js
+ create mode 100644 src/app/api/media-providers/tts/minimax/voices/route.js
+ create mode 100644 tests/unit/minimax-tts.test.js
+ create mode 100644 tests/unit/minimax-usage.test.js
+ create mode 100644 tests/unit/minimax-voices.test.js
+
+diff --git a/open-sse/handlers/ttsProviders/genericFormats.js b/open-sse/handlers/ttsProviders/genericFormats.js
+index 148d5a1f2..2f27f9eac 100644
+--- a/open-sse/handlers/ttsProviders/genericFormats.js
++++ b/open-sse/handlers/ttsProviders/genericFormats.js
+@@ -1,6 +1,7 @@
+ // Generic config-driven TTS handlers — dispatched by ttsConfig.format.
+ // Each handler accepts { baseUrl, apiKey, text, modelId, voiceId } and returns { base64, format }.
+ import { responseToBase64, throwUpstreamError } from "./_base.js";
++import minimaxTts from "./minimax.js";
+ 
+ // Hyperbolic: POST { text } → { audio: base64 }
+ async function hyperbolic({ baseUrl, apiKey, text }) {
+@@ -164,4 +165,5 @@ export const FORMAT_HANDLERS = {
+   coqui,
+   tortoise,
+   openai: openaiCompat,
++  "minimax-tts": minimaxTts,
+ };
+diff --git a/open-sse/handlers/ttsProviders/minimax.js b/open-sse/handlers/ttsProviders/minimax.js
+new file mode 100644
+index 000000000..b435e2b48
+--- /dev/null
++++ b/open-sse/handlers/ttsProviders/minimax.js
+@@ -0,0 +1,59 @@
++import { Buffer } from "node:buffer";
++
++function hexToBase64(audioHex) {
++  const clean = typeof audioHex === "string" ? audioHex.trim() : "";
++  if (!clean) throw new Error("MiniMax TTS returned no audio");
++  if (clean.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(clean)) {
++    throw new Error("MiniMax TTS returned invalid audio");
++  }
++  return Buffer.from(clean, "hex").toString("base64");
++}
++
++// MiniMax T2A HTTP: returns hex-encoded audio in non-streaming mode.
++export default async function minimaxTts({ baseUrl, apiKey, text, modelId, voiceId }) {
++  const res = await fetch(baseUrl, {
++    method: "POST",
++    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
++    body: JSON.stringify({
++      model: modelId || "speech-2.8-hd",
++      text,
++      stream: false,
++      language_boost: "auto",
++      output_format: "hex",
++      voice_setting: {
++        voice_id: voiceId || "English_expressive_narrator",
++        speed: 1,
++        vol: 1,
++        pitch: 0,
++      },
++      audio_setting: {
++        sample_rate: 32000,
++        bitrate: 128000,
++        format: "mp3",
++        channel: 1,
++      },
++    }),
++  });
++
++  const rawText = await res.text();
++  let data = {};
++  if (rawText) {
++    try { data = JSON.parse(rawText); } catch { data = {}; }
++  }
++
++  const baseResp = data.base_resp || data.baseResp || {};
++  const statusCode = Number(baseResp.status_code ?? baseResp.statusCode ?? 0);
++  const statusMessage = baseResp.status_msg || baseResp.statusMsg || data.message || "";
++
++  if (!res.ok) {
++    throw new Error(statusMessage || rawText || `MiniMax TTS error (${res.status})`);
++  }
++  if (statusCode !== 0) {
++    throw new Error(statusMessage || "MiniMax TTS upstream error");
++  }
++
++  return {
++    base64: hexToBase64(data.data?.audio),
++    format: data.extra_info?.audio_format || data.extraInfo?.audioFormat || "mp3",
++  };
++}
+diff --git a/open-sse/services/usage.js b/open-sse/services/usage.js
+index 9bc032511..a5e32366a 100644
+--- a/open-sse/services/usage.js
++++ b/open-sse/services/usage.js
+@@ -966,16 +966,29 @@ async function getGlmUsage(apiKey, provider, proxyOptions = null) {
+ }
+ 
+ // ── MiniMax helpers ──────────────────────────────────────────────────────
+-function isMiniMaxTextQuotaModel(modelName) {
+-  const normalized = (modelName || "").trim().toLowerCase();
+-  return normalized.startsWith("minimax-m") || normalized.startsWith("coding-plan");
+-}
+-
+ function getMiniMaxField(model, snakeKey, camelKey) {
+   if (!model || typeof model !== "object") return null;
+   return model[snakeKey] ?? model[camelKey] ?? null;
+ }
+ 
++function getMiniMaxModelName(model) {
++  return String(getMiniMaxField(model, "model_name", "modelName") || "").trim();
++}
++
++function formatMiniMaxQuotaName(model) {
++  const rawName = getMiniMaxModelName(model);
++  if (!rawName) return "MiniMax";
++
++  return rawName
++    .replace(/[_-]+/g, " ")
++    .replace(/\s+/g, " ")
++    .trim()
++    .replace(/\b\w/g, (ch) => ch.toUpperCase())
++    .replace(/\bTo\b/g, "to")
++    .replace(/\bTts\b/g, "TTS")
++    .replace(/\bHd\b/g, "HD");
++}
++
+ function getMiniMaxSessionTotal(model) {
+   return Math.max(0, Number(getMiniMaxField(model, "current_interval_total_count", "currentIntervalTotalCount")) || 0);
+ }
+@@ -984,11 +997,8 @@ function getMiniMaxWeeklyTotal(model) {
+   return Math.max(0, Number(getMiniMaxField(model, "current_weekly_total_count", "currentWeeklyTotalCount")) || 0);
+ }
+ 
+-function pickMiniMaxRepresentativeModel(models, getTotal) {
+-  const withQuota = models.filter((m) => getTotal(m) > 0);
+-  const pool = withQuota.length > 0 ? withQuota : models;
+-  if (pool.length === 0) return null;
+-  return pool.reduce((best, current) => (getTotal(current) > getTotal(best) ? current : best));
++function hasMiniMaxQuota(model) {
++  return getMiniMaxSessionTotal(model) > 0 || getMiniMaxWeeklyTotal(model) > 0;
+ }
+ 
+ function getMiniMaxResetAt(model, capturedAtMs, remainsSnake, remainsCamel, endSnake, endCamel) {
+@@ -1011,6 +1021,19 @@ function buildMiniMaxQuota(total, count, resetAt, countMeansRemaining) {
+   };
+ }
+ 
++function addMiniMaxQuota(quotas, key, model, getTotal, countSnake, countCamel, resetArgs, countMeansRemaining) {
++  const total = getTotal(model);
++  if (total <= 0) return;
++
++  const count = Math.max(0, Number(getMiniMaxField(model, countSnake, countCamel)) || 0);
++  quotas[key] = buildMiniMaxQuota(
++    total,
++    count,
++    getMiniMaxResetAt(model, ...resetArgs),
++    countMeansRemaining
++  );
++}
++
+ /**
+  * MiniMax Token Plan / Coding Plan usage
+  */
+@@ -1064,34 +1087,37 @@ async function getMiniMaxUsage(apiKey, provider, proxyOptions = null) {
+ 
+       const modelRemains = payload?.model_remains ?? payload?.modelRemains;
+       const allModels = Array.isArray(modelRemains) ? modelRemains : [];
+-      const textModels = allModels.filter((m) => isMiniMaxTextQuotaModel(String(getMiniMaxField(m, "model_name", "modelName"))));
++      const quotaModels = allModels.filter(hasMiniMaxQuota);
+ 
+-      if (textModels.length === 0) {
+-        return { message: "MiniMax connected. No text quota data was returned." };
++      if (quotaModels.length === 0) {
++        return { message: "MiniMax connected. No quota data was returned." };
+       }
+ 
+       const capturedAtMs = Date.now();
+       const countMeansRemaining = usageUrl.includes("/coding_plan/remains");
+       const quotas = {};
+ 
+-      const sessionModel = pickMiniMaxRepresentativeModel(textModels, getMiniMaxSessionTotal);
+-      if (sessionModel) {
+-        const total = getMiniMaxSessionTotal(sessionModel);
+-        const count = Math.max(0, Number(getMiniMaxField(sessionModel, "current_interval_usage_count", "currentIntervalUsageCount")) || 0);
+-        quotas["session (5h)"] = buildMiniMaxQuota(
+-          total, count,
+-          getMiniMaxResetAt(sessionModel, capturedAtMs, "remains_time", "remainsTime", "end_time", "endTime"),
++      for (const model of quotaModels) {
++        const displayName = formatMiniMaxQuotaName(model);
++        addMiniMaxQuota(
++          quotas,
++          `${displayName} (5h)`,
++          model,
++          getMiniMaxSessionTotal,
++          "current_interval_usage_count",
++          "currentIntervalUsageCount",
++          [capturedAtMs, "remains_time", "remainsTime", "end_time", "endTime"],
+           countMeansRemaining
+         );
+-      }
+ 
+-      const weeklyModel = pickMiniMaxRepresentativeModel(textModels, getMiniMaxWeeklyTotal);
+-      if (weeklyModel && getMiniMaxWeeklyTotal(weeklyModel) > 0) {
+-        const total = getMiniMaxWeeklyTotal(weeklyModel);
+-        const count = Math.max(0, Number(getMiniMaxField(weeklyModel, "current_weekly_usage_count", "currentWeeklyUsageCount")) || 0);
+-        quotas["weekly (7d)"] = buildMiniMaxQuota(
+-          total, count,
+-          getMiniMaxResetAt(weeklyModel, capturedAtMs, "weekly_remains_time", "weeklyRemainsTime", "weekly_end_time", "weeklyEndTime"),
++        addMiniMaxQuota(
++          quotas,
++          `${displayName} (7d)`,
++          model,
++          getMiniMaxWeeklyTotal,
++          "current_weekly_usage_count",
++          "currentWeeklyUsageCount",
++          [capturedAtMs, "weekly_remains_time", "weeklyRemainsTime", "weekly_end_time", "weeklyEndTime"],
+           countMeansRemaining
+         );
+       }
+diff --git a/src/app/(dashboard)/dashboard/media-providers/[kind]/[id]/page.js b/src/app/(dashboard)/dashboard/media-providers/[kind]/[id]/page.js
+index c771492bd..e8bf57fa5 100644
+--- a/src/app/(dashboard)/dashboard/media-providers/[kind]/[id]/page.js
++++ b/src/app/(dashboard)/dashboard/media-providers/[kind]/[id]/page.js
+@@ -372,9 +372,9 @@ function TtsExampleCard({ providerId }) {
+   const config = TTS_PROVIDER_CONFIG[providerId] || TTS_PROVIDER_CONFIG["edge-tts"];
+ 
+   // Voice state
+-  const [selectedVoice, setSelectedVoice]     = useState("");
++  const [selectedVoice, setSelectedVoice]     = useState(config.defaultVoiceId || "");
+   const [selectedVoiceName, setSelectedVoiceName] = useState("");
+-  const [voiceId, setVoiceId]               = useState(""); // editable voice id (elevenlabs)
++  const [voiceId, setVoiceId]               = useState(config.defaultVoiceId || ""); // editable voice id (elevenlabs/config providers)
+   // Voices shown below Voice row after language selected
+   const [countryVoices, setCountryVoices]     = useState([]);
+   const [selectedLang, setSelectedLang]       = useState("");
+diff --git a/src/app/api/media-providers/tts/minimax/voices/route.js b/src/app/api/media-providers/tts/minimax/voices/route.js
+new file mode 100644
+index 000000000..955efce44
+--- /dev/null
++++ b/src/app/api/media-providers/tts/minimax/voices/route.js
+@@ -0,0 +1,113 @@
++import { NextResponse } from "next/server";
++import { getProviderConnections } from "@/lib/localDb";
++
++const MINIMAX_VOICE_ENDPOINTS = {
++  minimax: "https://api.minimax.io/v1/get_voice",
++  "minimax-cn": "https://api.minimaxi.com/v1/get_voice",
++};
++
++const VOICE_GROUPS = [
++  { key: "system_voice", label: "System" },
++  { key: "voice_cloning", label: "Cloned" },
++  { key: "voice_generation", label: "Generated" },
++  { key: "music_generation", label: "Music" },
++];
++
++function inferLanguage(voiceId) {
++  const value = typeof voiceId === "string" ? voiceId.trim() : "";
++  if (!value.includes("_")) return "Custom";
++  return value.split("_")[0] || "Custom";
++}
++
++function addVoice(byLang, code, voice) {
++  if (!byLang[code]) byLang[code] = { code, name: code, voices: [] };
++  if (byLang[code].voices.some((v) => v.id === voice.id)) return;
++  byLang[code].voices.push(voice);
++}
++
++function normalizeMiniMaxVoices(data) {
++  const byLang = {};
++
++  for (const group of VOICE_GROUPS) {
++    const voices = Array.isArray(data?.[group.key]) ? data[group.key] : [];
++    for (const item of voices) {
++      const voiceId = item?.voice_id || item?.voiceId;
++      if (!voiceId) continue;
++
++      const voiceName = item?.voice_name || item?.voiceName || voiceId;
++      const lang = group.key === "system_voice" ? inferLanguage(voiceId) : "Custom";
++      addVoice(byLang, lang, {
++        id: voiceId,
++        name: group.key === "system_voice" ? voiceName : `${voiceName} · ${group.label}`,
++        lang,
++        category: group.key,
++      });
++    }
++  }
++
++  const languages = Object.values(byLang).sort((a, b) => {
++    if (a.code === "Custom") return 1;
++    if (b.code === "Custom") return -1;
++    return a.name.localeCompare(b.name);
++  });
++
++  for (const lang of languages) {
++    lang.voices.sort((a, b) => a.name.localeCompare(b.name));
++  }
++
++  return { languages, byLang };
++}
++
++/**
++ * GET /api/media-providers/tts/minimax/voices[?provider=minimax|minimax-cn&voice_type=all]
++ * Returns { languages, byLang } grouped for the shared TTS voice picker.
++ */
++export async function GET(request) {
++  try {
++    const { searchParams } = new URL(request.url);
++    const provider = searchParams.get("provider") === "minimax-cn" ? "minimax-cn" : "minimax";
++    const voiceType = searchParams.get("voice_type") || "all";
++    const langFilter = searchParams.get("lang");
++
++    const connections = await getProviderConnections({ provider, isActive: true });
++    const apiKey = connections[0]?.apiKey;
++    if (!apiKey) {
++      return NextResponse.json({ error: `No ${provider} connection found` }, { status: 400 });
++    }
++
++    const res = await fetch(MINIMAX_VOICE_ENDPOINTS[provider], {
++      method: "POST",
++      headers: {
++        Authorization: `Bearer ${apiKey}`,
++        "Content-Type": "application/json",
++      },
++      body: JSON.stringify({ voice_type: voiceType }),
++    });
++
++    const rawText = await res.text();
++    let data = {};
++    if (rawText) {
++      try { data = JSON.parse(rawText); } catch { data = {}; }
++    }
++
++    const baseResp = data.base_resp || data.baseResp || {};
++    const statusCode = Number(baseResp.status_code ?? baseResp.statusCode ?? 0);
++    const statusMessage = baseResp.status_msg || baseResp.statusMsg || data.message || "";
++
++    if (!res.ok) {
++      return NextResponse.json({ error: `MiniMax API ${res.status}: ${statusMessage || rawText || "Failed"}` }, { status: 502 });
++    }
++    if (statusCode !== 0) {
++      return NextResponse.json({ error: statusMessage || "MiniMax voice API error" }, { status: 502 });
++    }
++
++    const normalized = normalizeMiniMaxVoices(data);
++    if (langFilter) {
++      return NextResponse.json({ voices: normalized.byLang[langFilter]?.voices || [] });
++    }
++
++    return NextResponse.json(normalized);
++  } catch (err) {
++    return NextResponse.json({ error: err.message || "Failed to fetch MiniMax voices" }, { status: 502 });
++  }
++}
+diff --git a/src/shared/constants/providers.js b/src/shared/constants/providers.js
+index d20df3c11..afa6a9655 100644
+--- a/src/shared/constants/providers.js
++++ b/src/shared/constants/providers.js
+@@ -40,6 +40,17 @@ export const THINKING_CONFIG = {
+   }
+ };
+ 
++const MINIMAX_TTS_MODELS = [
++  { id: "speech-2.8-hd", name: "Speech 2.8 HD" },
++  { id: "speech-2.8-turbo", name: "Speech 2.8 Turbo" },
++  { id: "speech-2.6-hd", name: "Speech 2.6 HD" },
++  { id: "speech-2.6-turbo", name: "Speech 2.6 Turbo" },
++  { id: "speech-02-hd", name: "Speech 02 HD" },
++  { id: "speech-02-turbo", name: "Speech 02 Turbo" },
++  { id: "speech-01-hd", name: "Speech 01 HD" },
++  { id: "speech-01-turbo", name: "Speech 01 Turbo" },
++];
++
+ // OAuth Providers
+ export const OAUTH_PROVIDERS = {
+   claude: { id: "claude", alias: "cc", name: "Claude Code", icon: "smart_toy", color: "#D97757", website: "https://claude.ai", notice: { signupUrl: "https://claude.ai" } },
+@@ -57,8 +68,8 @@ export const APIKEY_PROVIDERS = {
+   glm: { id: "glm", alias: "glm", name: "GLM Coding", icon: "code", color: "#2563EB", textIcon: "GL", website: "https://open.bigmodel.cn", notice: { apiKeyUrl: "https://open.bigmodel.cn/usercenter/apikeys" } },
+   "glm-cn": { id: "glm-cn", alias: "glm-cn", name: "GLM (China)", icon: "code", color: "#DC2626", textIcon: "GC", website: "https://open.bigmodel.cn", notice: { apiKeyUrl: "https://open.bigmodel.cn/usercenter/apikeys" } },
+   kimi: { id: "kimi", alias: "kimi", name: "Kimi", icon: "psychology", color: "#1E3A8A", textIcon: "KM", website: "https://kimi.moonshot.cn", notice: { apiKeyUrl: "https://platform.moonshot.ai/console/api-keys" }, serviceKinds: ["llm", "webSearch"], searchViaChat: { defaultModel: "kimi-k2.5", pricingUrl: "https://platform.moonshot.ai/docs/pricing/chat" } },
+-  minimax: { id: "minimax", alias: "minimax", name: "Minimax Coding", icon: "memory", color: "#7C3AED", textIcon: "MM", website: "https://www.minimaxi.com", notice: { apiKeyUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key" }, serviceKinds: ["llm", "image", "imageToText", "webSearch"], searchViaChat: { defaultModel: "MiniMax-M2.7", pricingUrl: "https://www.minimaxi.com/document/price" } },
+-  "minimax-cn": { id: "minimax-cn", alias: "minimax-cn", name: "Minimax (China)", icon: "memory", color: "#DC2626", textIcon: "MC", website: "https://www.minimaxi.com", notice: { apiKeyUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key" } },
++  minimax: { id: "minimax", alias: "minimax", name: "Minimax Coding", icon: "memory", color: "#7C3AED", textIcon: "MM", website: "https://www.minimaxi.com", notice: { apiKeyUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key" }, serviceKinds: ["llm", "image", "imageToText", "webSearch", "tts"], searchViaChat: { defaultModel: "MiniMax-M2.7", pricingUrl: "https://www.minimaxi.com/document/price" }, ttsConfig: { baseUrl: "https://api.minimax.io/v1/t2a_v2", authType: "apikey", authHeader: "bearer", format: "minimax-tts", models: MINIMAX_TTS_MODELS } },
++  "minimax-cn": { id: "minimax-cn", alias: "minimax-cn", name: "Minimax (China)", icon: "memory", color: "#DC2626", textIcon: "MC", website: "https://www.minimaxi.com", notice: { apiKeyUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key" }, serviceKinds: ["llm", "tts"], ttsConfig: { baseUrl: "https://api.minimaxi.com/v1/t2a_v2", authType: "apikey", authHeader: "bearer", format: "minimax-tts", models: MINIMAX_TTS_MODELS } },
+   alicode: { id: "alicode", alias: "alicode", name: "Alibaba", icon: "cloud", color: "#FF6A00", textIcon: "ALi", website: "https://bailian.console.aliyun.com", notice: { apiKeyUrl: "https://bailian.console.aliyun.com/?apiKey=1" } },
+   "alicode-intl": { id: "alicode-intl", alias: "alicode-intl", name: "Alibaba Intl", icon: "cloud", color: "#FF6A00", textIcon: "ALi", website: "https://modelstudio.console.alibabacloud.com", notice: { apiKeyUrl: "https://modelstudio.console.alibabacloud.com/?apiKey=1" } },
+   "xiaomi-mimo": { id: "xiaomi-mimo", alias: "mimo", name: "Xiaomi MiMo", icon: "smart_toy", color: "#FF6900", textIcon: "XM", website: "https://xiaomimimo.com", notice: { apiKeyUrl: "https://xiaomimimo.com" } },
+diff --git a/src/shared/constants/ttsProviders.js b/src/shared/constants/ttsProviders.js
+index e59d7f083..f1b990d35 100644
+--- a/src/shared/constants/ttsProviders.js
++++ b/src/shared/constants/ttsProviders.js
+@@ -109,6 +109,22 @@ export const TTS_PROVIDER_CONFIG = {
+     hasVoiceIdInput: true,
+     voiceSource: "config",
+   },
++  "minimax": {
++    hasModelSelector: true,
++    hasBrowseButton: true,
++    hasVoiceIdInput: true,
++    voiceSource: "api-language",
++    apiEndpoint: "/api/media-providers/tts/minimax/voices",
++    defaultVoiceId: "English_expressive_narrator",
++  },
++  "minimax-cn": {
++    hasModelSelector: true,
++    hasBrowseButton: true,
++    hasVoiceIdInput: true,
++    voiceSource: "api-language",
++    apiEndpoint: "/api/media-providers/tts/minimax/voices?provider=minimax-cn",
++    defaultVoiceId: "English_expressive_narrator",
++  },
+   "gemini": {
+     hasLanguageDropdown: false,
+     hasLanguageHint: true, // sends body.language to guide TTS pronunciation
+diff --git a/tests/unit/minimax-tts.test.js b/tests/unit/minimax-tts.test.js
+new file mode 100644
+index 000000000..ec61da2fd
+--- /dev/null
++++ b/tests/unit/minimax-tts.test.js
+@@ -0,0 +1,120 @@
++import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
++import { handleTtsCore } from "../../open-sse/handlers/ttsCore.js";
++
++const originalFetch = global.fetch;
++
++describe("MiniMax TTS", () => {
++  beforeEach(() => {
++    global.fetch = vi.fn();
++  });
++
++  afterEach(() => {
++    global.fetch = originalFetch;
++  });
++
++  it("sends MiniMax T2A payload and converts hex audio to base64 JSON", async () => {
++    global.fetch.mockResolvedValueOnce(
++      new Response(
++        JSON.stringify({
++          data: { audio: "00010203", status: 2 },
++          extra_info: { audio_format: "mp3" },
++          base_resp: { status_code: 0, status_msg: "success" },
++        }),
++        { status: 200, headers: { "Content-Type": "application/json" } }
++      )
++    );
++
++    const result = await handleTtsCore({
++      provider: "minimax",
++      model: "speech-2.8-hd/English_expressive_narrator",
++      input: "Hello from MiniMax",
++      credentials: { apiKey: "test-key" },
++      responseFormat: "json",
++    });
++
++    expect(result.success).toBe(true);
++    expect(global.fetch).toHaveBeenCalledWith(
++      "https://api.minimax.io/v1/t2a_v2",
++      expect.objectContaining({
++        method: "POST",
++        headers: expect.objectContaining({
++          "Content-Type": "application/json",
++          Authorization: "Bearer test-key",
++        }),
++      })
++    );
++
++    const sent = JSON.parse(global.fetch.mock.calls[0][1].body);
++    expect(sent).toMatchObject({
++      model: "speech-2.8-hd",
++      text: "Hello from MiniMax",
++      stream: false,
++      language_boost: "auto",
++      output_format: "hex",
++      voice_setting: {
++        voice_id: "English_expressive_narrator",
++        speed: 1,
++        vol: 1,
++        pitch: 0,
++      },
++      audio_setting: {
++        sample_rate: 32000,
++        bitrate: 128000,
++        format: "mp3",
++        channel: 1,
++      },
++    });
++
++    const body = await result.response.json();
++    expect(body).toEqual({ audio: "AAECAw==", format: "mp3" });
++  });
++
++  it("uses the default MiniMax voice when no voice is provided", async () => {
++    global.fetch.mockResolvedValueOnce(
++      new Response(
++        JSON.stringify({
++          data: { audio: "00010203", status: 2 },
++          base_resp: { status_code: 0, status_msg: "success" },
++        }),
++        { status: 200, headers: { "Content-Type": "application/json" } }
++      )
++    );
++
++    const result = await handleTtsCore({
++      provider: "minimax-cn",
++      model: "speech-2.8-turbo",
++      input: "Hello",
++      credentials: { apiKey: "test-key" },
++      responseFormat: "json",
++    });
++
++    expect(result.success).toBe(true);
++    expect(global.fetch.mock.calls[0][0]).toBe("https://api.minimaxi.com/v1/t2a_v2");
++
++    const sent = JSON.parse(global.fetch.mock.calls[0][1].body);
++    expect(sent.model).toBe("speech-2.8-turbo");
++    expect(sent.voice_setting.voice_id).toBe("English_expressive_narrator");
++  });
++
++  it("surfaces MiniMax base_resp errors", async () => {
++    global.fetch.mockResolvedValueOnce(
++      new Response(
++        JSON.stringify({
++          base_resp: { status_code: 1008, status_msg: "insufficient quota" },
++        }),
++        { status: 200, headers: { "Content-Type": "application/json" } }
++      )
++    );
++
++    const result = await handleTtsCore({
++      provider: "minimax",
++      model: "speech-2.8-hd/English_expressive_narrator",
++      input: "Hello",
++      credentials: { apiKey: "test-key" },
++    });
++
++    expect(result.success).toBe(false);
++    expect(result.status).toBe(502);
++    expect(result.error).toContain("insufficient quota");
++  });
++});
+diff --git a/tests/unit/minimax-usage.test.js b/tests/unit/minimax-usage.test.js
+new file mode 100644
+index 000000000..d2772da95
+--- /dev/null
++++ b/tests/unit/minimax-usage.test.js
+@@ -0,0 +1,116 @@
++import { describe, it, expect, vi, beforeEach } from "vitest";
++
++vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
++  proxyAwareFetch: vi.fn(),
++}));
++
++import { proxyAwareFetch } from "../../open-sse/utils/proxyFetch.js";
++import { getUsageForProvider } from "../../open-sse/services/usage.js";
++
++function usageResponse(modelRemains) {
++  return new Response(
++    JSON.stringify({
++      base_resp: { status_code: 0, status_msg: "success" },
++      model_remains: modelRemains,
++    }),
++    { status: 200, headers: { "Content-Type": "application/json" } }
++  );
++}
++
++describe("MiniMax usage", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++  });
++
++  it("parses token-plan TTS quota counts as used counts", async () => {
++    proxyAwareFetch.mockResolvedValueOnce(
++      usageResponse([
++        {
++          model_name: "text to speech hd",
++          current_interval_total_count: 4000,
++          current_interval_usage_count: 25,
++          current_weekly_total_count: 12000,
++          current_weekly_usage_count: 100,
++          end_time: "2026-05-12T10:00:00.000Z",
++          weekly_end_time: "2026-05-19T10:00:00.000Z",
++        },
++      ])
++    );
++
++    const usage = await getUsageForProvider({
++      provider: "minimax",
++      apiKey: "test-key",
++    });
++
++    expect(usage.message).toBeUndefined();
++    expect(usage.quotas["Text to Speech HD (5h)"]).toMatchObject({
++      used: 25,
++      total: 4000,
++      remaining: 3975,
++    });
++    expect(usage.quotas["Text to Speech HD (7d)"]).toMatchObject({
++      used: 100,
++      total: 12000,
++      remaining: 11900,
++    });
++  });
++
++  it("parses coding-plan TTS quota counts as remaining counts", async () => {
++    proxyAwareFetch.mockResolvedValueOnce(
++      usageResponse([
++        {
++          modelName: "Text to Speech HD",
++          currentIntervalTotalCount: 4000,
++          currentIntervalUsageCount: 4000,
++          currentWeeklyTotalCount: 12000,
++          currentWeeklyUsageCount: 11800,
++          remainsTime: 1000,
++          weeklyRemainsTime: 2000,
++        },
++      ])
++    );
++
++    const usage = await getUsageForProvider({
++      provider: "minimax-cn",
++      apiKey: "test-key",
++    });
++
++    expect(usage.message).toBeUndefined();
++    expect(usage.quotas["Text to Speech HD (5h)"]).toMatchObject({
++      used: 0,
++      total: 4000,
++      remaining: 4000,
++    });
++    expect(usage.quotas["Text to Speech HD (7d)"]).toMatchObject({
++      used: 200,
++      total: 12000,
++      remaining: 11800,
++    });
++  });
++
++  it("keeps non-TTS MiniMax quota rows instead of filtering to text only", async () => {
++    proxyAwareFetch.mockResolvedValueOnce(
++      usageResponse([
++        {
++          model_name: "music-2.6",
++          current_interval_total_count: 100,
++          current_interval_usage_count: 5,
++        },
++        {
++          model_name: "image-01",
++          current_interval_total_count: 50,
++          current_interval_usage_count: 2,
++        },
++      ])
++    );
++
++    const usage = await getUsageForProvider({
++      provider: "minimax",
++      apiKey: "test-key",
++    });
++
++    expect(Object.keys(usage.quotas)).toEqual(["Music 2.6 (5h)", "Image 01 (5h)"]);
++    expect(usage.quotas["Music 2.6 (5h)"].used).toBe(5);
++    expect(usage.quotas["Image 01 (5h)"].used).toBe(2);
++  });
++});
+diff --git a/tests/unit/minimax-voices.test.js b/tests/unit/minimax-voices.test.js
+new file mode 100644
+index 000000000..8cbb84389
+--- /dev/null
++++ b/tests/unit/minimax-voices.test.js
+@@ -0,0 +1,83 @@
++import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
++
++vi.mock("../../src/lib/localDb.js", () => ({
++  getProviderConnections: vi.fn(),
++}));
++
++import { getProviderConnections } from "../../src/lib/localDb.js";
++import { GET } from "../../src/app/api/media-providers/tts/minimax/voices/route.js";
++
++const originalFetch = global.fetch;
++
++describe("MiniMax voices API", () => {
++  beforeEach(() => {
++    global.fetch = vi.fn();
++    vi.clearAllMocks();
++  });
++
++  afterEach(() => {
++    global.fetch = originalFetch;
++  });
++
++  it("fetches global MiniMax voices with stored API key", async () => {
++    getProviderConnections.mockResolvedValueOnce([{ apiKey: "test-key" }]);
++    global.fetch.mockResolvedValueOnce(
++      new Response(
++        JSON.stringify({
++          system_voice: [
++            { voice_id: "English_expressive_narrator", voice_name: "Expressive Narrator" },
++            { voice_id: "Chinese (Mandarin)_female_beijing", voice_name: "Female Beijing" },
++          ],
++          voice_cloning: [{ voice_id: "clone_123", voice_name: "My Voice" }],
++          base_resp: { status_code: 0, status_msg: "success" },
++        }),
++        { status: 200, headers: { "Content-Type": "application/json" } }
++      )
++    );
++
++    const response = await GET(new Request("http://localhost/api/media-providers/tts/minimax/voices"));
++    const body = await response.json();
++
++    expect(response.status).toBe(200);
++    expect(getProviderConnections).toHaveBeenCalledWith({ provider: "minimax", isActive: true });
++    expect(global.fetch).toHaveBeenCalledWith(
++      "https://api.minimax.io/v1/get_voice",
++      expect.objectContaining({
++        method: "POST",
++        headers: expect.objectContaining({
++          Authorization: "Bearer test-key",
++          "Content-Type": "application/json",
++        }),
++        body: JSON.stringify({ voice_type: "all" }),
++      })
++    );
++    expect(body.byLang.English.voices[0].id).toBe("English_expressive_narrator");
++    expect(body.byLang["Chinese (Mandarin)"].voices[0].id).toBe("Chinese (Mandarin)_female_beijing");
++    expect(body.byLang.Custom.voices[0]).toMatchObject({
++      id: "clone_123",
++      name: "My Voice · Cloned",
++      category: "voice_cloning",
++    });
++  });
++
++  it("fetches China MiniMax voices when provider=minimax-cn", async () => {
++    getProviderConnections.mockResolvedValueOnce([{ apiKey: "test-key" }]);
++    global.fetch.mockResolvedValueOnce(
++      new Response(
++        JSON.stringify({
++          system_voice: [{ voice_id: "Chinese (Mandarin)_female_beijing", voice_name: "Female Beijing" }],
++          base_resp: { status_code: 0, status_msg: "success" },
++        }),
++        { status: 200, headers: { "Content-Type": "application/json" } }
++      )
++    );
++
++    const response = await GET(new Request("http://localhost/api/media-providers/tts/minimax/voices?provider=minimax-cn"));
++    const body = await response.json();
++
++    expect(response.status).toBe(200);
++    expect(getProviderConnections).toHaveBeenCalledWith({ provider: "minimax-cn", isActive: true });
++    expect(global.fetch.mock.calls[0][0]).toBe("https://api.minimaxi.com/v1/get_voice");
++    expect(body.byLang["Chinese (Mandarin)"].voices[0].id).toBe("Chinese (Mandarin)_female_beijing");
++  });
++});

@@ -611,7 +611,7 @@ Quality: Production-ready models + RTK saves 20-40% tokens
 ```
 Combo: "always-on"
   1. cc/claude-opus-4-7        (best quality)
-  2. cx/gpt-5.5                (second subscription)
+  2. cx/gpt-5.5-xhigh                (second subscription)
   3. glm/glm-5.1               (cheap, resets daily)
   4. minimax/MiniMax-M2.7      (cheapest, 5h reset)
   5. kr/claude-sonnet-4.5      (free unlimited)
@@ -765,7 +765,7 @@ Dashboard → Providers → Connect Codex
 → 5-hour + weekly reset
 
 Models:
-  cx/gpt-5.5
+  cx/gpt-5.5-xhigh
   cx/gpt-5.4
   cx/gpt-5.3-codex
   cx/gpt-5.2-codex
@@ -1137,7 +1137,7 @@ Notes:
 - `cc/claude-haiku-4-5-20251001`
 
 **Codex (`cx/`)** - Plus/Pro:
-- `cx/gpt-5.5`
+- `cx/gpt-5.5-xhigh`
 - `cx/gpt-5.4`
 - `cx/gpt-5.3-codex`
 - `cx/gpt-5.2-codex`

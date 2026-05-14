@@ -1,0 +1,98 @@
+From b690585b57807814fd617bb094f562982ba25cf5 Mon Sep 17 00:00:00 2001
+From: eng2007 <aleksey.semenov@gmail.com>
+Date: Sat, 9 May 2026 17:26:05 +0300
+Subject: [PATCH] Add Codex GPT 5.5 image support
+
+---
+ open-sse/config/providerModels.js         |  1 +
+ open-sse/handlers/imageProviders/codex.js |  2 +-
+ tests/unit/image-generation.test.js       | 51 +++++++++++++++++++++++
+ 3 files changed, 53 insertions(+), 1 deletion(-)
+
+diff --git a/open-sse/config/providerModels.js b/open-sse/config/providerModels.js
+index 14c5a9202..62872db5b 100644
+--- a/open-sse/config/providerModels.js
++++ b/open-sse/config/providerModels.js
+@@ -58,6 +58,7 @@ export const PROVIDER_MODELS = {
+     { id: "gpt-5-codex", name: "GPT 5 Codex" },
+     { id: "gpt-5-codex-mini", name: "GPT 5 Codex Mini" },
+     // Image models (uses image_generation tool, requires Plus/Pro plan)
++    { id: "gpt-5.5-image", name: "GPT 5.5 Image", type: "image", capabilities: ["text2img", "edit"], params: ["size", "quality", "background", "image_detail", "output_format"] },
+     { id: "gpt-5.4-image", name: "GPT 5.4 Image", type: "image", capabilities: ["text2img", "edit"], params: ["size", "quality", "background", "image_detail", "output_format"] },
+     { id: "gpt-5.3-image", name: "GPT 5.3 Image", type: "image", capabilities: ["text2img", "edit"], params: ["size", "quality", "background", "image_detail", "output_format"] },
+     { id: "gpt-5.2-image", name: "GPT 5.2 Image", type: "image", capabilities: ["text2img", "edit"], params: ["size", "quality", "background", "image_detail", "output_format"] },
+diff --git a/open-sse/handlers/imageProviders/codex.js b/open-sse/handlers/imageProviders/codex.js
+index 776c4ee5d..2f8edc551 100644
+--- a/open-sse/handlers/imageProviders/codex.js
++++ b/open-sse/handlers/imageProviders/codex.js
+@@ -4,7 +4,7 @@ import { nowSec } from "./_base.js";
+ 
+ const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
+ const CODEX_USER_AGENT = "codex-imagen/0.2.6";
+-const CODEX_VERSION = "0.122.0";
++const CODEX_VERSION = "0.129.0";
+ const CODEX_ORIGINATOR = "codex_cli_rs";
+ const CODEX_MODEL_SUFFIX = "-image";
+ const CODEX_REF_DETAIL = "high";
+diff --git a/tests/unit/image-generation.test.js b/tests/unit/image-generation.test.js
+index 614a28e23..4aca1de1e 100644
+--- a/tests/unit/image-generation.test.js
++++ b/tests/unit/image-generation.test.js
+@@ -284,6 +284,57 @@ describe("handleImageGenerationCore", () => {
+     expect(responseBody.data[0].b64_json).toBeTruthy();
+   });
+ 
++  it("generates image with Codex gpt-5.5-image using current Codex version header", async () => {
++    global.fetch.mockResolvedValueOnce(
++      new Response(
++        [
++          "event: response.output_item.done",
++          'data: {"item":{"type":"image_generation_call","result":"base64codeximage"}}',
++          "",
++          "",
++        ].join("\n"),
++        { status: 200, headers: { "Content-Type": "text/event-stream" } }
++      )
++    );
++
++    const result = await handleImageGenerationCore({
++      body: {
++        prompt: "A green square",
++        size: "1024x1024",
++        output_format: "png",
++      },
++      modelInfo: { provider: "codex", model: "gpt-5.5-image" },
++      credentials: {
++        accessToken: "codex-token",
++        providerSpecificData: { chatgptAccountId: "account-123" },
++      },
++      log: null,
++    });
++
++    expect(result.success).toBe(true);
++    expect(global.fetch).toHaveBeenCalledWith(
++      "https://chatgpt.com/backend-api/codex/responses",
++      expect.objectContaining({
++        method: "POST",
++        headers: expect.objectContaining({
++          authorization: "Bearer codex-token",
++          "chatgpt-account-id": "account-123",
++          version: "0.129.0",
++        }),
++      })
++    );
++
++    const fetchCall = global.fetch.mock.calls[0];
++    const requestBody = JSON.parse(fetchCall[1].body);
++    expect(requestBody.model).toBe("gpt-5.5");
++    expect(requestBody.tools).toEqual([
++      { type: "image_generation", output_format: "png", size: "1024x1024" },
++    ]);
++
++    const responseBody = await result.response.json();
++    expect(responseBody.data[0].b64_json).toBe("base64codeximage");
++  });
++
+   it("generates image with Cloudflare Workers AI JSON response", async () => {
+     global.fetch.mockResolvedValueOnce(
+       new Response(
