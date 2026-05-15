@@ -163,7 +163,7 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
     }
     if (tab === "cron") {
       fetch(`/api/cron?officeId=${agent.officeId}`).then(r => r.json()).then(d => {
-        setCronJobs((d.jobs || []).filter((j: any) => j.agentId === agent.id));
+        setCronJobs((d.jobs || []).filter((j: any) => j.agentId === agent.id || (j.pipeline || []).some((s: any) => s.agentId === agent.id)));
       }).catch(() => {});
     }
   }, [tab, agent.id, agent.officeId]);
