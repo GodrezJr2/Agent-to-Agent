@@ -59,29 +59,32 @@ async function tickCronJobs() {
         const pipeline: Array<{ agentId: string; prompt: string }> | null = job.pipeline || null;
 
         if (pipeline && pipeline.length > 0) {
-          // Pipeline mode: run steps sequentially, pass output to next step
+          // Pipeline mode: run steps sequentially, accumulate all outputs for context
           console.log(`[Cron] Pipeline mode: ${pipeline.length} steps`);
-          let prevOutput = "";
+          const stepOutputs: string[] = [];
           for (let i = 0; i < pipeline.length; i++) {
             const step = pipeline[i];
             const agent = await getAgentById(step.agentId);
             if (!agent) { console.error(`[Cron] Pipeline step ${i} agent ${step.agentId} not found`); continue; }
 
-            const prompt = prevOutput
-              ? `${step.prompt}
-
-Context from previous step:
-${prevOutput.slice(0, 1000)}`
-              : step.prompt;
+            let prompt = step.prompt;
+            if (stepOutputs.length > 0) {
+              const ctx = stepOutputs
+                .map((out, idx) => `--- Step ${idx + 1} (${pipeline[idx].agentId}) ---\n${out}`)
+                .join("\n\n")
+                .slice(0, 8000);
+              prompt = `${step.prompt}\n\n=== Context from previous pipeline steps ===\n${ctx}`;
+            }
 
             await createMessage({ officeId: job.officeId, agentId: step.agentId, role: "system", content: `[Cron pipeline step ${i + 1}/${pipeline.length}] ${step.prompt}` });
 
             try {
-              prevOutput = await callA2A(step.agentId, prompt);
-              console.log(`[Cron] Pipeline step ${i + 1} done: ${prevOutput.slice(0, 80)}`);
+              const output = await callA2A(step.agentId, prompt);
+              stepOutputs.push(output);
+              console.log(`[Cron] Pipeline step ${i + 1} done: ${output.slice(0, 80)}`);
             } catch (err: any) {
               console.error(`[Cron] Pipeline step ${i + 1} failed:`, err.message);
-              prevOutput = `Error: ${err.message}`;
+              stepOutputs.push(`Error: ${err.message}`);
             }
           }
         } else {
