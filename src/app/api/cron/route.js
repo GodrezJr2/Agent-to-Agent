@@ -19,11 +19,14 @@ export async function GET(request) {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { agentId, officeId, schedule, prompt } = body;
-    if (!agentId || !officeId || !schedule || !prompt) {
-      return NextResponse.json({ error: "agentId, officeId, schedule, and prompt are required" }, { status: 400 });
+    const { agentId, officeId, schedule, prompt, pipeline } = body;
+    if (!officeId || !schedule) {
+      return NextResponse.json({ error: "officeId and schedule are required" }, { status: 400 });
     }
-    const job = await createCronJob({ agentId, officeId, schedule, prompt });
+    if (!pipeline && (!agentId || !prompt)) {
+      return NextResponse.json({ error: "Either pipeline or (agentId + prompt) required" }, { status: 400 });
+    }
+    const job = await createCronJob({ agentId: agentId || pipeline?.[0]?.agentId, officeId, schedule, prompt, pipeline });
     return NextResponse.json({ job }, { status: 201 });
   } catch (error) {
     console.log("Error creating cron job:", error);

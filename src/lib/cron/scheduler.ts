@@ -15,6 +15,27 @@ export function stopCronScheduler() {
   if (interval) { clearInterval(interval); interval = null; }
 }
 
+async function callA2A(agentId: string, prompt: string): Promise<string> {
+  const res = await fetch(`${BASE_URL}/api/agents/${agentId}/a2a`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method: "message/send",
+      params: {
+        message: { role: "user", parts: [{ type: "text", text: prompt }] },
+        metadata: { fromCron: true },
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(`A2A HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  const artifact = data.result?.artifacts?.[0];
+  return artifact?.parts?.map((p: any) => p.text || "").join("") || "";
+}
+
 async function tickCronJobs() {
   try {
     const jobs = await getEnabledCronJobs();
@@ -27,43 +48,54 @@ async function tickCronJobs() {
         if (intervalMs === null) continue;
 
         const nextRun = new Date(lastRun.getTime() + intervalMs);
-        if (nextRun <= now) {
-          console.log(`[Cron] Triggering job ${job.id} for agent ${job.agentId}`);
+        if (nextRun > now) continue;
 
-          await updateCronJob(job.id, {
-            lastRun: now.toISOString(),
-            nextRun: new Date(now.getTime() + intervalMs).toISOString(),
-          });
+        console.log(`[Cron] Triggering job ${job.id}`);
+        await updateCronJob(job.id, {
+          lastRun: now.toISOString(),
+          nextRun: new Date(now.getTime() + intervalMs).toISOString(),
+        });
 
+        const pipeline: Array<{ agentId: string; prompt: string }> | null = job.pipeline || null;
+
+        if (pipeline && pipeline.length > 0) {
+          // Pipeline mode: run steps sequentially, pass output to next step
+          console.log(`[Cron] Pipeline mode: ${pipeline.length} steps`);
+          let prevOutput = "";
+          for (let i = 0; i < pipeline.length; i++) {
+            const step = pipeline[i];
+            const agent = await getAgentById(step.agentId);
+            if (!agent) { console.error(`[Cron] Pipeline step ${i} agent ${step.agentId} not found`); continue; }
+
+            const prompt = prevOutput
+              ? `${step.prompt}
+
+Context from previous step:
+${prevOutput.slice(0, 1000)}`
+              : step.prompt;
+
+            await createMessage({ officeId: job.officeId, agentId: step.agentId, role: "system", content: `[Cron pipeline step ${i + 1}/${pipeline.length}] ${step.prompt}` });
+
+            try {
+              prevOutput = await callA2A(step.agentId, prompt);
+              console.log(`[Cron] Pipeline step ${i + 1} done: ${prevOutput.slice(0, 80)}`);
+            } catch (err: any) {
+              console.error(`[Cron] Pipeline step ${i + 1} failed:`, err.message);
+              prevOutput = `Error: ${err.message}`;
+            }
+          }
+        } else {
+          // Single agent mode
           const agent = await getAgentById(job.agentId);
           if (!agent) continue;
 
-          await createMessage({
-            officeId: job.officeId,
-            agentId: job.agentId,
-            role: "system",
-            content: `[Cron: ${job.schedule}] ${job.prompt}`,
-          });
+          await createMessage({ officeId: job.officeId, agentId: job.agentId, role: "system", content: `[Cron: ${job.schedule}] ${job.prompt}` });
 
-          // Actually invoke the agent via A2A
           try {
-            const res = await fetch(`${BASE_URL}/api/agents/${job.agentId}/a2a`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                jsonrpc: "2.0",
-                id: Date.now(),
-                method: "message/send",
-                params: {
-                  message: { role: "user", parts: [{ type: "text", text: job.prompt }] },
-                  metadata: { fromCron: true, schedule: job.schedule, officeId: job.officeId },
-                },
-              }),
-            });
-            if (!res.ok) console.error(`[Cron] A2A failed for job ${job.id}: HTTP ${res.status}`);
-            else console.log(`[Cron] A2A done for job ${job.id}`);
-          } catch (fetchErr) {
-            console.error(`[Cron] A2A fetch error for job ${job.id}:`, fetchErr);
+            await callA2A(job.agentId, job.prompt);
+            console.log(`[Cron] Single agent done for job ${job.id}`);
+          } catch (err: any) {
+            console.error(`[Cron] A2A error for job ${job.id}:`, err.message);
           }
         }
       } catch (err) {
@@ -76,7 +108,6 @@ async function tickCronJobs() {
 }
 
 function parseSimpleSchedule(schedule: string): number | null {
-  // Support simple schedules: "5m", "1h", "30s", "1d"
   const match = schedule.match(/^(\d+)\s*(s|m|h|d)$/);
   if (!match) return null;
   const value = parseInt(match[1], 10);

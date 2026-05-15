@@ -145,6 +145,8 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
   const [cronSchedule, setCronSchedule] = useState("");
   const [cronPrompt, setCronPrompt] = useState("");
   const [cronAdding, setCronAdding] = useState(false);
+  const [cronMode, setCronMode] = useState<"single" | "pipeline">("single");
+  const [pipelineSteps, setPipelineSteps] = useState<Array<{agentId: string; prompt: string}>>([]);
   const [tab, setTab] = useState<"edit" | "tasks" | "cron">("edit");
   // Other agents this agent can report to (exclude self)
   const potentialManagers = allAgents.filter((a) => a.id !== agent.id);
@@ -311,49 +313,63 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
         <div className="space-y-3">
           {/* Add new job */}
           <div className="bg-gray-800 rounded p-3 space-y-2">
-            <p className="text-gray-400 text-xs font-medium">New Scheduled Task</p>
-            <div className="flex gap-2">
-              <div className="w-24 flex-shrink-0">
-                <label className="text-gray-500 text-xs">Interval</label>
-                <input
-                  value={cronSchedule}
-                  onChange={e => setCronSchedule(e.target.value)}
-                  placeholder="6h"
-                  className="w-full bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-blue-500 outline-none font-mono"
-                />
-                <p className="text-gray-600 text-xs mt-0.5">30m 6h 1d</p>
-              </div>
-              <div className="flex-1 min-w-0">
-                <label className="text-gray-500 text-xs">Prompt</label>
-                <textarea
-                  value={cronPrompt}
-                  onChange={e => setCronPrompt(e.target.value)}
-                  rows={2}
-                  placeholder="Search GitHub trending and write report to /workspaces/trends/today.md"
-                  className="w-full bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-blue-500 outline-none resize-none"
-                />
+            <div className="flex items-center justify-between">
+              <p className="text-gray-400 text-xs font-medium">New Scheduled Task</p>
+              <div className="flex gap-1">
+                <button onClick={() => setCronMode("single")} className={`px-2 py-0.5 text-xs rounded ${cronMode === "single" ? "bg-blue-600 text-white" : "bg-gray-700 text-gray-400"}`}>Single</button>
+                <button onClick={() => { setCronMode("pipeline"); if (pipelineSteps.length === 0) setPipelineSteps([{agentId: agent.id, prompt: ""}]); }} className={`px-2 py-0.5 text-xs rounded ${cronMode === "pipeline" ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-400"}`}>Pipeline</button>
               </div>
             </div>
+            <div>
+              <label className="text-gray-500 text-xs">Interval</label>
+              <input value={cronSchedule} onChange={e => setCronSchedule(e.target.value)} placeholder="6h" className="w-full bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-blue-500 outline-none font-mono" />
+              <p className="text-gray-600 text-xs mt-0.5">Examples: 30m 6h 1d</p>
+            </div>
+            {cronMode === "single" ? (
+              <div>
+                <label className="text-gray-500 text-xs">Prompt</label>
+                <textarea value={cronPrompt} onChange={e => setCronPrompt(e.target.value)} rows={2} placeholder="What should this agent do?" className="w-full bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-blue-500 outline-none resize-none" />
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <label className="text-gray-500 text-xs">Pipeline steps — run in order, output passed to next</label>
+                {pipelineSteps.map((step, i) => (
+                  <div key={i} className="bg-gray-700 rounded p-2 space-y-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-gray-500 text-xs w-5 flex-shrink-0">#{i+1}</span>
+                      <select value={step.agentId} onChange={e => setPipelineSteps(prev => prev.map((s, idx) => idx === i ? {...s, agentId: e.target.value} : s))} className="flex-1 bg-gray-800 text-white text-xs px-2 py-1 rounded border border-gray-600 outline-none">
+                        {allAgents.map((a: any) => <option key={a.id} value={a.id}>{a.name}{a.role ? ` (${a.role})` : ""}</option>)}
+                      </select>
+                      <div className="flex gap-1 flex-shrink-0">
+                        {i > 0 && <button onClick={() => setPipelineSteps(prev => { const s=[...prev]; [s[i-1],s[i]]=[s[i],s[i-1]]; return s; })} className="text-gray-500 hover:text-white text-xs px-1">up</button>}
+                        {i < pipelineSteps.length-1 && <button onClick={() => setPipelineSteps(prev => { const s=[...prev]; [s[i],s[i+1]]=[s[i+1],s[i]]; return s; })} className="text-gray-500 hover:text-white text-xs px-1">dn</button>}
+                        <button onClick={() => setPipelineSteps(prev => prev.filter((_,idx) => idx !== i))} className="text-red-400 hover:text-red-300 text-xs px-1">del</button>
+                      </div>
+                    </div>
+                    <textarea value={step.prompt} onChange={e => setPipelineSteps(prev => prev.map((s, idx) => idx === i ? {...s, prompt: e.target.value} : s))} rows={2} placeholder={`What should step ${i+1} do?`} className="w-full bg-gray-800 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-purple-500 outline-none resize-none" />
+                  </div>
+                ))}
+                <button onClick={() => setPipelineSteps(prev => [...prev, {agentId: allAgents[0]?.id || "", prompt: ""}])} className="w-full px-2 py-1 text-xs text-purple-400 border border-dashed border-purple-800 rounded hover:border-purple-500">+ Add step</button>
+              </div>
+            )}
             <button
-              disabled={cronAdding || !cronSchedule.trim() || !cronPrompt.trim()}
+              disabled={cronAdding || !cronSchedule.trim() || (cronMode === "single" ? !cronPrompt.trim() : pipelineSteps.length < 2 || pipelineSteps.some(s => !s.prompt.trim()))}
               onClick={async () => {
                 setCronAdding(true);
                 try {
-                  await fetch("/api/cron", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ agentId: agent.id, officeId: agent.officeId, schedule: cronSchedule.trim(), prompt: cronPrompt.trim() }),
-                  });
-                  setCronSchedule("");
-                  setCronPrompt("");
+                  const body = cronMode === "pipeline"
+                    ? { officeId: agent.officeId, schedule: cronSchedule.trim(), pipeline: pipelineSteps }
+                    : { agentId: agent.id, officeId: agent.officeId, schedule: cronSchedule.trim(), prompt: cronPrompt.trim() };
+                  await fetch("/api/cron", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+                  setCronSchedule(""); setCronPrompt(""); setPipelineSteps([]);
                   const d = await fetch(`/api/cron?officeId=${agent.officeId}`).then(r => r.json());
-                  setCronJobs((d.jobs || []).filter((j: any) => j.agentId === agent.id));
+                  setCronJobs((d.jobs || []).filter((j: any) => j.agentId === agent.id || (j.pipeline || []).some((s: any) => s.agentId === agent.id)));
                 } catch {}
                 setCronAdding(false);
               }}
-              className="w-full px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-500 disabled:opacity-40"
+              className={`w-full px-3 py-1.5 text-white text-xs rounded disabled:opacity-40 ${cronMode === "pipeline" ? "bg-purple-600 hover:bg-purple-500" : "bg-blue-600 hover:bg-blue-500"}`}
             >
-              {cronAdding ? "Adding..." : "+ Schedule"}
+              {cronAdding ? "Adding..." : cronMode === "pipeline" ? "+ Schedule Pipeline" : "+ Schedule"}
             </button>
           </div>
 
@@ -364,7 +380,8 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
               <div key={job.id} className="bg-gray-800 rounded p-2.5 flex items-start gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
-                    <span className="text-blue-400 text-xs font-mono font-semibold">{job.schedule}</span>
+                    <span className={`text-xs font-mono font-semibold ${job.pipeline ? "text-purple-400" : "text-blue-400"}`}>{job.schedule}</span>
+                    {job.pipeline && <span className="text-purple-500 text-xs bg-purple-900/30 px-1 rounded">{job.pipeline.length} steps</span>}
                     {job.lastRun && (
                       <span className="text-gray-600 text-xs">last: {new Date(job.lastRun).toLocaleTimeString()}</span>
                     )}
