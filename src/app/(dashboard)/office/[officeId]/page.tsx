@@ -6,6 +6,7 @@ import Link from "next/link";
 import { OfficeCanvas } from "@/office/components/OfficeCanvas";
 import { ChatPanel } from "@/office/components/ChatPanel";
 import { useOfficeStore } from "@/office/engine/officeStore";
+import { getJobCountdownLabel, getNextEnabledJob } from "@/lib/cron/countdown";
 
 function AddAgentModal({ officeId, onClose, onCreated }: { officeId: string; onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState("");
@@ -127,7 +128,7 @@ function AddAgentModal({ officeId, onClose, onCreated }: { officeId: string; onC
   );
 }
 
-function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { officeId: string; agent: any; allAgents: any[]; onClose: () => void; onUpdated: () => void }) {
+function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated, onCronChanged }: { officeId: string; agent: any; allAgents: any[]; onClose: () => void; onUpdated: () => void; onCronChanged: () => void }) {
   const [name, setName] = useState(agent.name || "");
   const [role, setRole] = useState(agent.role || "");
   const [systemPrompt, setSystemPrompt] = useState(agent.systemPrompt || "");
@@ -148,6 +149,7 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
   const [cronMode, setCronMode] = useState<"single" | "pipeline">("single");
   const [pipelineSteps, setPipelineSteps] = useState<Array<{agentId: string; prompt: string}>>([]);
   const [expandedFlow, setExpandedFlow] = useState<string | null>(null);
+  const [now, setNow] = useState(() => new Date());
   const [tab, setTab] = useState<"edit" | "tasks" | "cron">("edit");
   // Other agents this agent can report to (exclude self)
   const potentialManagers = allAgents.filter((a) => a.id !== agent.id);
@@ -155,6 +157,11 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
   useEffect(() => {
     fetch("/api/combos").then(r => r.json()).then(d => setCombos(d.combos || [])).catch(() => {});
     fetch("/api/v1/models").then(r => r.json()).then(d => setModels(d.data || d.models || [])).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -364,7 +371,9 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
                   await fetch("/api/cron", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
                   setCronSchedule(""); setCronPrompt(""); setPipelineSteps([]);
                   const d = await fetch(`/api/cron?officeId=${agent.officeId}`).then(r => r.json());
-                  setCronJobs((d.jobs || []).filter((j: any) => j.agentId === agent.id || (j.pipeline || []).some((s: any) => s.agentId === agent.id)));
+                  const jobs = d.jobs || [];
+                  setCronJobs(jobs.filter((j: any) => j.agentId === agent.id || (j.pipeline || []).some((s: any) => s.agentId === agent.id)));
+                  onCronChanged();
                 } catch {}
                 setCronAdding(false);
               }}
@@ -390,6 +399,9 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
                     {job.lastRun && (
                       <span className="text-gray-600 text-xs">last: {new Date(job.lastRun).toLocaleTimeString()}</span>
                     )}
+                    <span className={`text-xs font-medium ${job.enabled ? "text-emerald-400" : "text-gray-500"}`}>
+                      {getJobCountdownLabel(job, now)}
+                    </span>
                     {job.nextRun && (
                       <span className="text-gray-600 text-xs">next: {new Date(job.nextRun).toLocaleTimeString()}</span>
                     )}
@@ -409,6 +421,7 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
                         body: JSON.stringify({ enabled: !job.enabled }),
                       });
                       setCronJobs(prev => prev.map(j => j.id === job.id ? { ...j, enabled: !j.enabled } : j));
+                      onCronChanged();
                     }}
                     className={`px-2 py-0.5 text-xs rounded ${job.enabled ? "bg-green-900 text-green-400 hover:bg-green-800" : "bg-gray-700 text-gray-500 hover:bg-gray-600"}`}
                     title={job.enabled ? "Pause" : "Resume"}
@@ -421,6 +434,7 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
                       if (!confirm("Delete this scheduled task?")) return;
                       await fetch(`/api/cron/${job.id}`, { method: "DELETE" });
                       setCronJobs(prev => prev.filter(j => j.id !== job.id));
+                      onCronChanged();
                     }}
                     className="px-2 py-0.5 text-xs rounded bg-gray-700 text-red-400 hover:bg-red-900"
                     title="Delete"
@@ -591,6 +605,8 @@ export default function OfficePage() {
   const officeId = params.officeId as string;
   const [office, setOffice] = useState<any>(null);
   const [agents, setAgents] = useState<any[]>([]);
+  const [officeCronJobs, setOfficeCronJobs] = useState<any[]>([]);
+  const [now, setNow] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -624,6 +640,14 @@ export default function OfficePage() {
     };
   }, []);
 
+  async function loadCronJobs() {
+    try {
+      const res = await fetch(`/api/cron?officeId=${officeId}`);
+      const data = await res.json();
+      setOfficeCronJobs(data.jobs || []);
+    } catch {}
+  }
+
   async function loadAgents() {
     try {
       const res = await fetch(`/api/offices/${officeId}/agents`);
@@ -654,7 +678,7 @@ export default function OfficePage() {
 
       if (officeData.office) {
         setOffice(officeData.office);
-        await loadAgents();
+        await Promise.all([loadAgents(), loadCronJobs()]);
         setLoading(false);
         return;
       }
@@ -681,6 +705,16 @@ export default function OfficePage() {
 
   useEffect(() => {
     loadOrCreateOffice();
+  }, [officeId]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const refresh = setInterval(loadCronJobs, 60000);
+    return () => clearInterval(refresh);
   }, [officeId]);
 
   useEffect(() => {
@@ -711,6 +745,11 @@ export default function OfficePage() {
     else setAgentIdle(agentId);
   }, [setAgentActive, setAgentIdle]);
 
+  const nextCron = getNextEnabledJob(officeCronJobs, now);
+  const nextCronAgent = nextCron
+    ? agents.find((a) => a.id === nextCron.job.agentId || (nextCron.job.pipeline || [])[0]?.agentId === a.id)
+    : null;
+
   if (loading) {
     return <div className="flex items-center justify-center h-screen bg-gray-900 text-gray-400">Loading office...</div>;
   }
@@ -727,7 +766,7 @@ export default function OfficePage() {
   return (
     <div className="flex flex-col h-full bg-gray-900">
       {showAddModal && <AddAgentModal officeId={officeId} onClose={() => setShowAddModal(false)} onCreated={loadAgents} />}
-      {editingAgent && <EditAgentModal officeId={officeId} agent={editingAgent} allAgents={agents} onClose={() => setEditingAgent(null)} onUpdated={loadAgents} />}
+      {editingAgent && <EditAgentModal officeId={officeId} agent={editingAgent} allAgents={agents} onClose={() => setEditingAgent(null)} onUpdated={loadAgents} onCronChanged={loadCronJobs} />}
       {showSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowSettings(false)}>
           <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
@@ -805,6 +844,13 @@ export default function OfficePage() {
           >
             Org
           </button>
+          {nextCron && (
+            <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-950/70 border border-emerald-900/70 rounded-full text-emerald-300 text-xs" title="Next scheduled task">
+              <span className="text-emerald-500">Next</span>
+              <span>{nextCronAgent?.name || "job"}</span>
+              <span>{getJobCountdownLabel(nextCron.job, now)}</span>
+            </span>
+          )}
           <span className="text-gray-500 text-xs">{agents.length} agents</span>
           <button onClick={() => setShowAddModal(true)} className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-500 transition-colors">+ Add Agent</button>
         </div>
