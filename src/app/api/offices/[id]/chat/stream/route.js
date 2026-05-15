@@ -355,6 +355,40 @@ export async function GET(request, { params }) {
           });
         }
 
+        // Execute delegations from a response and return results
+        async function runDelegations(agent, rawText) {
+          const delegations = parseDelegations(rawText);
+          const results = [];
+          for (const d of delegations) {
+            const target = allAgents.find(
+              (a) => a.id !== agent.id && (
+                a.name.toLowerCase() === d.agentName.toLowerCase() ||
+                a.name.toLowerCase().includes(d.agentName.toLowerCase()) ||
+                d.agentName.toLowerCase().includes(a.name.toLowerCase())
+              )
+            );
+            if (!target) {
+              console.warn(`[A2A][${agent.name}] target "${d.agentName}" not found`);
+              send({ type: "agent_error", agentId: agent.id, error: `Delegation target "${d.agentName}" not found` });
+              continue;
+            }
+            console.log(`[A2A][${agent.name}] → ${target.name}: "${d.message}"`);
+            send({ type: "agent_start", agentId: target.id, agentName: target.name });
+            try {
+              const reply = await callAgentA2A(target, agent, d.message);
+              await createMessage({ officeId, agentId: target.id, role: "agent", content: reply });
+              send({ type: "agent_chunk", agentId: target.id, delta: reply, fullResponse: reply });
+              send({ type: "agent_done", agentId: target.id, fullResponse: reply });
+              results.push({ agentName: target.name, reply });
+            } catch (err) {
+              console.error(`[A2A][${agent.name}→${target.name}] error:`, err.message);
+              send({ type: "agent_error", agentId: target.id, error: err.message });
+              results.push({ agentName: target.name, reply: `Error: ${err.message}` });
+            }
+          }
+          return results;
+        }
+
         const promises = targetAgents.map(async (agent) => {
           send({ type: "agent_start", agentId: agent.id, agentName: agent.name });
           try {
@@ -362,73 +396,50 @@ export async function GET(request, { params }) {
             const rawContent = result.content;
             const thinking = result.thinking || "";
 
-            // Detect A2A delegation tags
+            // Clean [A2A:...] tags → *(asking X...)* for UI display only
             const delegations = parseDelegations(rawContent);
-
-            // Clean calling agent's response — replace [A2A:...] tags with a subtle note
             let callerContent = rawContent;
             for (const d of delegations) {
               callerContent = callerContent.replace(d.raw, `*(asking ${d.agentName}...)*`);
             }
             callerContent = callerContent.trim();
 
-            // Save original rawContent to DB so LLM history sees [A2A:...] tags (not the cleaned text),
-            // preventing the LLM from copying *(asking X...)* literally on the next turn.
-            // Send the cleaned callerContent to the UI only.
             if (callerContent) {
               await createMessage({ officeId, agentId: agent.id, role: "agent", content: rawContent });
               send({ type: "agent_chunk", agentId: agent.id, delta: callerContent, fullResponse: callerContent, thinking });
             }
             send({ type: "agent_done", agentId: agent.id, fullResponse: callerContent, thinking });
 
-            // Process each delegation as a SEPARATE bubble for the target agent
-            const delegationResults = [];
-            for (const d of delegations) {
-              const target = allAgents.find(
-                (a) => a.id !== agent.id && (
-                  a.name.toLowerCase() === d.agentName.toLowerCase() ||
-                  a.name.toLowerCase().includes(d.agentName.toLowerCase()) ||
-                  d.agentName.toLowerCase().includes(a.name.toLowerCase())
-                )
-              );
-              if (!target) {
-                console.warn(`[A2A][${agent.name}] delegation target "${d.agentName}" not found in office`);
-                send({ type: "agent_error", agentId: agent.id, error: `Delegation target "${d.agentName}" not found` });
-                continue;
-              }
+            // Process delegations from initial response
+            const delegationResults = await runDelegations(agent, rawContent);
 
-              console.log(`[A2A][${agent.name}] → ${target.name}: "${d.message}"`);
-              send({ type: "agent_start", agentId: target.id, agentName: target.name });
-              try {
-                const reply = await callAgentA2A(target, agent, d.message);
-                await createMessage({ officeId, agentId: target.id, role: "agent", content: reply });
-                send({ type: "agent_chunk", agentId: target.id, delta: reply, fullResponse: reply });
-                send({ type: "agent_done", agentId: target.id, fullResponse: reply });
-                delegationResults.push({ agentName: target.name, reply });
-              } catch (err) {
-                console.error(`[A2A][${agent.name}→${target.name}] error:`, err.message);
-                send({ type: "agent_error", agentId: target.id, error: err.message });
-                delegationResults.push({ agentName: target.name, reply: `Error: ${err.message}` });
-              }
-            }
-
-            // After all delegates finish, call the delegating agent back to verify
+            // Verify callback: re-invoke manager with all results
             if (delegationResults.length > 0) {
-              const resultsText = delegationResults
-                .map((r) => `**${r.agentName}:** ${r.reply}`)
-                .join("\n\n");
+              const resultsText = delegationResults.map((r) => `**${r.agentName}:** ${r.reply}`).join("\n\n");
               const verifyPrompt = `Your team has completed their tasks. Here are their reports:\n\n${resultsText}\n\nReview their work and give a final summary.`;
 
               console.log(`[A2A][${agent.name}] verify callback with ${delegationResults.length} results`);
               send({ type: "agent_start", agentId: agent.id, agentName: agent.name });
               const updatedHistory = await getChatMessages(officeId, { limit: 30 });
               const verifyResult = await callAgentLLM(agent, verifyPrompt, allAgents, updatedHistory, officeId);
-              const verifyContent = verifyResult.content;
-              if (verifyContent) {
-                await createMessage({ officeId, agentId: agent.id, role: "agent", content: verifyContent });
-                send({ type: "agent_chunk", agentId: agent.id, delta: verifyContent, fullResponse: verifyContent, thinking: verifyResult.thinking });
+              const verifyRaw = verifyResult.content;
+
+              // Clean verify response for UI
+              const verifyDelegations = parseDelegations(verifyRaw);
+              let verifyDisplay = verifyRaw;
+              for (const d of verifyDelegations) {
+                verifyDisplay = verifyDisplay.replace(d.raw, `*(asking ${d.agentName}...)*`);
               }
-              send({ type: "agent_done", agentId: agent.id, fullResponse: verifyContent, thinking: verifyResult.thinking });
+              verifyDisplay = verifyDisplay.trim();
+
+              if (verifyDisplay) {
+                await createMessage({ officeId, agentId: agent.id, role: "agent", content: verifyRaw });
+                send({ type: "agent_chunk", agentId: agent.id, delta: verifyDisplay, fullResponse: verifyDisplay, thinking: verifyResult.thinking });
+              }
+              send({ type: "agent_done", agentId: agent.id, fullResponse: verifyDisplay, thinking: verifyResult.thinking });
+
+              // Process any delegations from the verify response (e.g. Chief → Analyst)
+              await runDelegations(agent, verifyRaw);
             }
           } catch (err) {
             console.error(`[LLM][${agent.name}] ERROR:`, err.message);
