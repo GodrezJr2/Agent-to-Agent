@@ -4,6 +4,23 @@ import { FORMATS } from "../formats.js";
 // Prefix for Claude OAuth tool names (must match request translator)
 const CLAUDE_OAUTH_TOOL_PREFIX = "proxy_";
 
+// Sanitize tool call arguments to fix bad params from non-Anthropic models
+function sanitizeToolArgs(toolName, argsJson) {
+  try {
+    const args = JSON.parse(argsJson);
+    const name = toolName.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)
+      ? toolName.slice(CLAUDE_OAUTH_TOOL_PREFIX.length)
+      : toolName;
+    if (name === "Read") {
+      if (typeof args.limit === "number" && args.limit > 2000) args.limit = 2000;
+      if (typeof args.offset === "number" && args.offset < 0) args.offset = 0;
+    }
+    return JSON.stringify(args);
+  } catch {
+    return argsJson;
+  }
+}
+
 // Helper: stop thinking block if started
 function stopThinkingBlock(state, results) {
   if (!state.thinkingBlockStarted) return;
@@ -170,11 +187,9 @@ export function openaiToClaudeResponse(chunk, state) {
       if (tc.function?.arguments) {
         const toolInfo = state.toolCalls.get(idx);
         if (toolInfo) {
-          results.push({
-            type: "content_block_delta",
-            index: toolInfo.blockIndex,
-            delta: { type: "input_json_delta", partial_json: tc.function.arguments }
-          });
+          // Buffer args instead of streaming — sanitize at finish to fix bad params
+          if (!state.toolArgBuffers) state.toolArgBuffers = new Map();
+          state.toolArgBuffers.set(idx, (state.toolArgBuffers.get(idx) || "") + tc.function.arguments);
         }
       }
     }
@@ -185,7 +200,17 @@ export function openaiToClaudeResponse(chunk, state) {
     stopThinkingBlock(state, results);
     stopTextBlock(state, results);
 
-    for (const [, toolInfo] of state.toolCalls) {
+    for (const [idx, toolInfo] of state.toolCalls) {
+      // Emit buffered + sanitized args as single delta before stop
+      const buffered = state.toolArgBuffers?.get(idx);
+      if (buffered) {
+        const sanitized = sanitizeToolArgs(toolInfo.name, buffered);
+        results.push({
+          type: "content_block_delta",
+          index: toolInfo.blockIndex,
+          delta: { type: "input_json_delta", partial_json: sanitized }
+        });
+      }
       results.push({
         type: "content_block_stop",
         index: toolInfo.blockIndex
