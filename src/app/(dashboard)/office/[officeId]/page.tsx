@@ -147,6 +147,7 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
   const [cronAdding, setCronAdding] = useState(false);
   const [cronMode, setCronMode] = useState<"single" | "pipeline">("single");
   const [pipelineSteps, setPipelineSteps] = useState<Array<{agentId: string; prompt: string}>>([]);
+  const [expandedFlow, setExpandedFlow] = useState<string | null>(null);
   const [tab, setTab] = useState<"edit" | "tasks" | "cron">("edit");
   // Other agents this agent can report to (exclude self)
   const potentialManagers = allAgents.filter((a) => a.id !== agent.id);
@@ -381,7 +382,11 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
                     <span className={`text-xs font-mono font-semibold ${job.pipeline ? "text-purple-400" : "text-blue-400"}`}>{job.schedule}</span>
-                    {job.pipeline && <span className="text-purple-500 text-xs bg-purple-900/30 px-1 rounded">{job.pipeline.length} steps</span>}
+                    {job.pipeline && (
+                      <button onClick={() => setExpandedFlow(expandedFlow === job.id ? null : job.id)} className="text-purple-400 text-xs bg-purple-900/40 hover:bg-purple-800/60 px-1.5 py-0.5 rounded transition-colors">
+                        {job.pipeline.length} steps {expandedFlow === job.id ? "▲" : "▼"}
+                      </button>
+                    )}
                     {job.lastRun && (
                       <span className="text-gray-600 text-xs">last: {new Date(job.lastRun).toLocaleTimeString()}</span>
                     )}
@@ -389,7 +394,10 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
                       <span className="text-gray-600 text-xs">next: {new Date(job.nextRun).toLocaleTimeString()}</span>
                     )}
                   </div>
-                  <p className="text-gray-300 text-xs line-clamp-2">{job.prompt}</p>
+                  {job.pipeline && expandedFlow === job.id
+                    ? <PipelineFlowView steps={job.pipeline} allAgents={allAgents} />
+                    : <p className="text-gray-300 text-xs line-clamp-2">{job.pipeline ? `${job.pipeline.length}-step pipeline` : job.prompt}</p>
+                  }
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
                   {/* Toggle enable/disable */}
@@ -437,6 +445,40 @@ function agentColor(id: string) {
   for (let i = 0; i < id.length; i++) h = id.charCodeAt(i) + ((h << 5) - h);
   return AGENT_COLORS[Math.abs(h) % AGENT_COLORS.length];
 }
+function PipelineFlowView({ steps, allAgents }: { steps: Array<{agentId: string; prompt: string}>; allAgents: any[] }) {
+  return (
+    <div className="overflow-x-auto py-2">
+      <div className="flex items-start gap-0 min-w-max">
+        {steps.map((step, i) => {
+          const agent = allAgents.find((a: any) => a.id === step.agentId);
+          const color = agent ? agentColor(agent.id) : "#6b7280";
+          return (
+            <div key={i} className="flex items-start flex-shrink-0">
+              <div className="flex flex-col items-center gap-1" style={{ width: 88 }}>
+                <div style={{ width: 30, height: 30, borderRadius: "50%", flexShrink: 0, background: color + "33", border: `2px solid ${color}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color }}>
+                  {agent ? agent.name.charAt(0).toUpperCase() : "?"}
+                </div>
+                <div className="text-center px-0.5">
+                  <div className="text-white text-xs font-medium leading-tight" style={{ maxWidth: 84, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent?.name || "Unknown"}</div>
+                  {agent?.role && <div className="text-gray-500" style={{ fontSize: 9, maxWidth: 84, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.role}</div>}
+                  <div className="text-gray-600 leading-tight mt-0.5" style={{ fontSize: 9, maxWidth: 84, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={step.prompt}>{step.prompt.slice(0, 32)}{step.prompt.length > 32 ? "…" : ""}</div>
+                </div>
+              </div>
+              {i < steps.length - 1 && (
+                <div className="flex items-center flex-shrink-0 mt-3.5 mx-0.5">
+                  <div style={{ width: 16, height: 2, background: "#7c3aed" }} />
+                  <div style={{ width: 0, height: 0, borderTop: "4px solid transparent", borderBottom: "4px solid transparent", borderLeft: "5px solid #7c3aed" }} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
 
 function OrgNode({ agent, allAgents, depth, onEdit }: { agent: any; allAgents: any[]; depth: number; onEdit: (a: any) => void }) {
   const reports = allAgents.filter((a) => a.managerId === agent.id);
