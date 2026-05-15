@@ -1,5 +1,8 @@
 import { getEnabledCronJobs, updateCronJob, getAgentById, createMessage } from "@/lib/db";
 
+const PORT = process.env.PORT || 20128;
+const BASE_URL = `http://localhost:${PORT}`;
+
 let interval: ReturnType<typeof setInterval> | null = null;
 
 export function startCronScheduler() {
@@ -19,7 +22,6 @@ async function tickCronJobs() {
 
     for (const job of jobs) {
       try {
-        // Basic interval checking using lastRun
         const lastRun = job.lastRun ? new Date(job.lastRun) : new Date(job.createdAt);
         const intervalMs = parseSimpleSchedule(job.schedule);
         if (intervalMs === null) continue;
@@ -28,10 +30,9 @@ async function tickCronJobs() {
         if (nextRun <= now) {
           console.log(`[Cron] Triggering job ${job.id} for agent ${job.agentId}`);
 
-          const nextNextRun = new Date(now.getTime() + intervalMs);
           await updateCronJob(job.id, {
             lastRun: now.toISOString(),
-            nextRun: nextNextRun.toISOString(),
+            nextRun: new Date(now.getTime() + intervalMs).toISOString(),
           });
 
           const agent = await getAgentById(job.agentId);
@@ -41,8 +42,29 @@ async function tickCronJobs() {
             officeId: job.officeId,
             agentId: job.agentId,
             role: "system",
-            content: `[Cron triggered: ${job.schedule}] Prompt: ${job.prompt}`,
+            content: `[Cron: ${job.schedule}] ${job.prompt}`,
           });
+
+          // Actually invoke the agent via A2A
+          try {
+            const res = await fetch(`${BASE_URL}/api/agents/${job.agentId}/a2a`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: Date.now(),
+                method: "message/send",
+                params: {
+                  message: { role: "user", parts: [{ type: "text", text: job.prompt }] },
+                  metadata: { fromCron: true, schedule: job.schedule, officeId: job.officeId },
+                },
+              }),
+            });
+            if (!res.ok) console.error(`[Cron] A2A failed for job ${job.id}: HTTP ${res.status}`);
+            else console.log(`[Cron] A2A done for job ${job.id}`);
+          } catch (fetchErr) {
+            console.error(`[Cron] A2A fetch error for job ${job.id}:`, fetchErr);
+          }
         }
       } catch (err) {
         console.error(`[Cron] Job ${job.id} failed:`, err);

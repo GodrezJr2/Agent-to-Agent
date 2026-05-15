@@ -141,7 +141,11 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [tasks, setTasks] = useState<any[]>([]);
-  const [tab, setTab] = useState<"edit" | "tasks">("edit");
+  const [cronJobs, setCronJobs] = useState<any[]>([]);
+  const [cronSchedule, setCronSchedule] = useState("");
+  const [cronPrompt, setCronPrompt] = useState("");
+  const [cronAdding, setCronAdding] = useState(false);
+  const [tab, setTab] = useState<"edit" | "tasks" | "cron">("edit");
   // Other agents this agent can report to (exclude self)
   const potentialManagers = allAgents.filter((a) => a.id !== agent.id);
 
@@ -154,7 +158,12 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
     if (tab === "tasks") {
       fetch(`/api/agents/${agent.id}/a2a`).then(r => r.json()).then(d => setTasks(d.recentTasks || [])).catch(() => {});
     }
-  }, [tab, agent.id]);
+    if (tab === "cron") {
+      fetch(`/api/cron?officeId=${agent.officeId}`).then(r => r.json()).then(d => {
+        setCronJobs((d.jobs || []).filter((j: any) => j.agentId === agent.id));
+      }).catch(() => {});
+    }
+  }, [tab, agent.id, agent.officeId]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -195,10 +204,10 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
         </div>
         {/* Tabs */}
         <div className="flex gap-1 mb-4">
-          {(["edit", "tasks"] as const).map((t) => (
+          {(["edit", "tasks", "cron"] as const).map((t) => (
             <button key={t} onClick={() => setTab(t)}
               className={`px-3 py-1 text-xs rounded capitalize ${tab === t ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400"}`}>
-              {t === "tasks" ? "A2A Tasks" : "Edit"}
+              {t === "tasks" ? "A2A Tasks" : t === "cron" ? "Scheduled" : "Edit"}
             </button>
           ))}
         </div>
@@ -295,6 +304,109 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated }: { of
           <div className="pt-2">
             <button onClick={onClose} className="w-full px-4 py-2 bg-gray-800 text-gray-300 text-sm rounded hover:bg-gray-700">Close</button>
           </div>
+        </div>
+        )}
+
+        {tab === "cron" && (
+        <div className="space-y-3">
+          {/* Add new job */}
+          <div className="bg-gray-800 rounded p-3 space-y-2">
+            <p className="text-gray-400 text-xs font-medium">New Scheduled Task</p>
+            <div className="flex gap-2">
+              <div className="w-24 flex-shrink-0">
+                <label className="text-gray-500 text-xs">Interval</label>
+                <input
+                  value={cronSchedule}
+                  onChange={e => setCronSchedule(e.target.value)}
+                  placeholder="6h"
+                  className="w-full bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-blue-500 outline-none font-mono"
+                />
+                <p className="text-gray-600 text-xs mt-0.5">30m 6h 1d</p>
+              </div>
+              <div className="flex-1 min-w-0">
+                <label className="text-gray-500 text-xs">Prompt</label>
+                <textarea
+                  value={cronPrompt}
+                  onChange={e => setCronPrompt(e.target.value)}
+                  rows={2}
+                  placeholder="Search GitHub trending and write report to /workspaces/trends/today.md"
+                  className="w-full bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-blue-500 outline-none resize-none"
+                />
+              </div>
+            </div>
+            <button
+              disabled={cronAdding || !cronSchedule.trim() || !cronPrompt.trim()}
+              onClick={async () => {
+                setCronAdding(true);
+                try {
+                  await fetch("/api/cron", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ agentId: agent.id, officeId: agent.officeId, schedule: cronSchedule.trim(), prompt: cronPrompt.trim() }),
+                  });
+                  setCronSchedule("");
+                  setCronPrompt("");
+                  const d = await fetch(`/api/cron?officeId=${agent.officeId}`).then(r => r.json());
+                  setCronJobs((d.jobs || []).filter((j: any) => j.agentId === agent.id));
+                } catch {}
+                setCronAdding(false);
+              }}
+              className="w-full px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-500 disabled:opacity-40"
+            >
+              {cronAdding ? "Adding..." : "+ Schedule"}
+            </button>
+          </div>
+
+          {/* Existing jobs */}
+          <div className="space-y-1.5 max-h-48 overflow-y-auto">
+            {cronJobs.length === 0 && <p className="text-gray-600 text-xs text-center py-3">No scheduled tasks yet</p>}
+            {cronJobs.map((job: any) => (
+              <div key={job.id} className="bg-gray-800 rounded p-2.5 flex items-start gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-blue-400 text-xs font-mono font-semibold">{job.schedule}</span>
+                    {job.lastRun && (
+                      <span className="text-gray-600 text-xs">last: {new Date(job.lastRun).toLocaleTimeString()}</span>
+                    )}
+                    {job.nextRun && (
+                      <span className="text-gray-600 text-xs">next: {new Date(job.nextRun).toLocaleTimeString()}</span>
+                    )}
+                  </div>
+                  <p className="text-gray-300 text-xs line-clamp-2">{job.prompt}</p>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  {/* Toggle enable/disable */}
+                  <button
+                    onClick={async () => {
+                      await fetch(`/api/cron/${job.id}`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ enabled: !job.enabled }),
+                      });
+                      setCronJobs(prev => prev.map(j => j.id === job.id ? { ...j, enabled: !j.enabled } : j));
+                    }}
+                    className={`px-2 py-0.5 text-xs rounded ${job.enabled ? "bg-green-900 text-green-400 hover:bg-green-800" : "bg-gray-700 text-gray-500 hover:bg-gray-600"}`}
+                    title={job.enabled ? "Pause" : "Resume"}
+                  >
+                    {job.enabled ? "on" : "off"}
+                  </button>
+                  {/* Delete */}
+                  <button
+                    onClick={async () => {
+                      if (!confirm("Delete this scheduled task?")) return;
+                      await fetch(`/api/cron/${job.id}`, { method: "DELETE" });
+                      setCronJobs(prev => prev.filter(j => j.id !== job.id));
+                    }}
+                    className="px-2 py-0.5 text-xs rounded bg-gray-700 text-red-400 hover:bg-red-900"
+                    title="Delete"
+                  >
+                    del
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <button onClick={onClose} className="w-full px-4 py-2 bg-gray-800 text-gray-300 text-sm rounded hover:bg-gray-700">Close</button>
         </div>
         )}
       </div>
