@@ -416,7 +416,7 @@ export async function GET(request, { params }) {
             // Verify callback: re-invoke manager with all results
             if (delegationResults.length > 0) {
               const resultsText = delegationResults.map((r) => `**${r.agentName}:** ${r.reply}`).join("\n\n");
-              const verifyPrompt = `Your team has completed their tasks. Here are their reports:\n\n${resultsText}\n\nReview their work and give a final summary.`;
+              const verifyPrompt = `Your team has completed their tasks. Here are their reports:\n\n${resultsText}\n\nProceed with your next step.`;
 
               console.log(`[A2A][${agent.name}] verify callback with ${delegationResults.length} results`);
               send({ type: "agent_start", agentId: agent.id, agentName: agent.name });
