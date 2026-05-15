@@ -173,6 +173,23 @@ export const AGENT_TOOLS = [
   {
     type: "function",
     function: {
+      name: "send_webhook",
+      description: "Send a message or notification to a webhook URL (Discord, Slack, or any HTTP webhook). For Discord: provide a webhook URL and a message. The message will be sent as a Discord embed if title is provided.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The webhook URL (Discord, Slack, or generic HTTP endpoint)" },
+          message: { type: "string", description: "The main message or body text to send" },
+          title: { type: "string", description: "Optional title (Discord embed title, Slack pretext)" },
+          color: { type: "number", description: "Optional Discord embed color as decimal integer (e.g. 5763719 for green, 15548997 for red)" },
+        },
+        required: ["url", "message"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "delete_file",
       description: "Delete a file in the office workspace.",
       parameters: {
@@ -456,6 +473,44 @@ async function toolGenerateFile({ filename, content }) {
   return `File generated: [${safe}](/generated/${unique}) — ${content.length} characters`;
 }
 
+async function toolSendWebhook({ url, message, title, color }) {
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    return `Invalid webhook URL: must start with http:// or https://`;
+  }
+
+  // Detect Discord webhook (discord.com/api/webhooks or discordapp.com)
+  const isDiscord = url.includes("discord.com/api/webhooks") || url.includes("discordapp.com/api/webhooks");
+  // Detect Slack (hooks.slack.com)
+  const isSlack = url.includes("hooks.slack.com");
+
+  let body;
+  if (isDiscord) {
+    // Discord webhook with embed
+    const embed = { description: message.slice(0, 4096), color: color ?? 5763719 };
+    if (title) embed.title = title.slice(0, 256);
+    body = { embeds: [embed] };
+  } else if (isSlack) {
+    // Slack incoming webhook
+    body = { text: title ? `*${title}*\n${message}` : message };
+  } else {
+    // Generic webhook — send JSON with message and optional title
+    body = { title, message, timestamp: new Date().toISOString() };
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) return `Webhook sent successfully (HTTP ${res.status})`;
+    const text = await res.text().catch(() => "");
+    return `Webhook failed: HTTP ${res.status} — ${text.slice(0, 200)}`;
+  } catch (err) {
+    return `Webhook error: ${err.message}`;
+  }
+}
+
 async function toolScheduleTask({ task, schedule }, agentId, officeId) {
   const db = await getAdapter();
   const id = uuidv4();
@@ -484,6 +539,7 @@ export async function executeTool(toolName, toolArgs, { agentId, officeId } = {}
       case "bash":         return await toolBash(toolArgs, agentId, officeId);
       case "grep_file":    return await toolGrepFile(toolArgs, agentId, officeId);
       case "delete_file":  return await toolDeleteFile(toolArgs, agentId, officeId);
+      case "send_webhook": return await toolSendWebhook(toolArgs);
       default: return `Unknown tool: ${toolName}`;
     }
   } catch (err) {
