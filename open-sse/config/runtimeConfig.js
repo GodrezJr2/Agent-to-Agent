@@ -32,7 +32,8 @@ export const MEMORY_CONFIG = {
 };
 
 // Stream stall timeout: abort if no chunk received within this duration
-export const STREAM_STALL_TIMEOUT_MS = 3 * 60 * 1000;
+// 10min to accommodate OpenAI-style models (gpt-5.5, o-series) that think silently before emitting
+export const STREAM_STALL_TIMEOUT_MS = 10 * 60 * 1000;
 
 // Default token limits
 export const DEFAULT_MAX_TOKENS = 64000;
