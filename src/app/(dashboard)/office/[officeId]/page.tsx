@@ -703,7 +703,7 @@ export default function OfficePage() {
 
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
         <div className="flex items-center gap-3">
-          <Link href="/dashboard" className="text-gray-400 hover:text-white text-sm transition-colors">&larr; Dashboard</Link>
+          <Link href="/office" className="text-gray-400 hover:text-white text-sm transition-colors">&larr; Offices</Link>
           <span className="text-gray-700">|</span>
           {editingName ? (
             <input

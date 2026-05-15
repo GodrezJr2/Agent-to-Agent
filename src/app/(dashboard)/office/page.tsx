@@ -2,11 +2,14 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function OfficeIndex() {
+  const router = useRouter();
   const [offices, setOffices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   async function loadOffices() {
     try {
@@ -21,6 +24,17 @@ export default function OfficeIndex() {
   const [newWorkspace, setNewWorkspace] = useState("");
 
   useEffect(() => { loadOffices(); }, []);
+
+  async function deleteOffice(id: string, name: string, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm(`Delete office "${name}"? This removes all agents and chat history.`)) return;
+    setDeletingId(id);
+    try {
+      await fetch(`/api/offices/${id}`, { method: "DELETE" });
+      setOffices(prev => prev.filter(o => o.id !== id));
+    } catch {} finally { setDeletingId(null); }
+  }
 
   async function createOffice() {
     if (!newName.trim()) return;
@@ -105,7 +119,16 @@ export default function OfficeIndex() {
                   {office.description && <p className="text-gray-500 text-sm mt-0.5">{office.description}</p>}
                   <p className="text-gray-600 text-xs mt-1">Created {new Date(office.createdAt).toLocaleDateString()}</p>
                 </div>
-                <span className="text-gray-400 text-sm">&rarr;</span>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={(e) => deleteOffice(office.id, office.name, e)}
+                    disabled={deletingId === office.id}
+                    className="px-2 py-1 text-xs text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded transition-colors disabled:opacity-40"
+                  >
+                    {deletingId === office.id ? "..." : "Delete"}
+                  </button>
+                  <span className="text-gray-400 text-sm">&rarr;</span>
+                </div>
               </div>
             </Link>
           ))}
