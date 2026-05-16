@@ -21,7 +21,7 @@ async function pingModel(modelId, baseUrl, apiKey) {
   try {
     const headers = { "Content-Type": "application/json" };
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-    const res = await fetch(`${baseUrl}/api/v1/chat/completions`, {
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers,
       body: JSON.stringify({
