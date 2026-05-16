@@ -1,9 +1,18 @@
 import { getEnabledCronJobs, updateCronJob, getAgentById, createMessage } from "@/lib/db";
+import { getConsistentMachineId } from "@/shared/utils/machineId";
 
 const PORT = process.env.PORT || 20128;
 const BASE_URL = `http://localhost:${PORT}`;
+const CLI_TOKEN_HEADER = "x-9r-cli-token";
+const CLI_TOKEN_SALT = "9r-cli-auth";
 
 let interval: ReturnType<typeof setInterval> | null = null;
+let cachedCliToken: string | null = null;
+
+async function getCliToken() {
+  if (!cachedCliToken) cachedCliToken = await getConsistentMachineId(CLI_TOKEN_SALT);
+  return cachedCliToken;
+}
 
 export function startCronScheduler() {
   if (interval) return;
@@ -18,7 +27,10 @@ export function stopCronScheduler() {
 async function callA2A(agentId: string, prompt: string): Promise<string> {
   const res = await fetch(`${BASE_URL}/api/agents/${agentId}/a2a`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      [CLI_TOKEN_HEADER]: await getCliToken(),
+    },
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: Date.now(),
