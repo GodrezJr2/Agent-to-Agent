@@ -7,6 +7,7 @@ import {
   mapDeepSeekModel,
   parseDeepSeekSse,
   probeDeepSeekWebToken,
+  resolveDeepSeekWasmPath,
   DeepSeekWebExecutor,
 } from "../../open-sse/executors/deepseek-web.js";
 
@@ -42,6 +43,18 @@ describe("mapDeepSeekModel", () => {
       thinkingEnabled: true,
       searchEnabled: false,
     });
+  });
+});
+
+describe("resolveDeepSeekWasmPath", () => {
+  it("resolves URL-like wasm module references after string coercion", () => {
+    const urlLike = {
+      toString() {
+        return new URL("../../open-sse/executors/deepseek-pow.wasm", import.meta.url).toString();
+      },
+    };
+
+    expect(resolveDeepSeekWasmPath(urlLike)).toContain("deepseek-pow.wasm");
   });
 });
 

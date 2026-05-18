@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
 
@@ -270,14 +271,16 @@ async function streamToText(body) {
   }
 }
 
+export function resolveDeepSeekWasmPath(wasmUrl = new URL("./deepseek-pow.wasm", import.meta.url)) {
+  return fileURLToPath(String(wasmUrl));
+}
+
 let _wasmInstancePromise = null;
 async function loadDeepSeekWasm() {
   if (_wasmInstancePromise) return _wasmInstancePromise;
   _wasmInstancePromise = (async () => {
     const { readFile } = await import("node:fs/promises");
-    const { fileURLToPath } = await import("node:url");
-    const wasmUrl = new URL("./deepseek-pow.wasm", import.meta.url);
-    const buffer = await readFile(fileURLToPath(wasmUrl));
+    const buffer = await readFile(resolveDeepSeekWasmPath());
     const { instance } = await WebAssembly.instantiate(buffer, {});
     return instance.exports;
   })();
