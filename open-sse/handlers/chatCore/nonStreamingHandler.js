@@ -9,11 +9,70 @@ import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, sav
 import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { decloakToolNames } from "../../utils/claudeCloaking.js";
 
+const CLAUDE_OAUTH_TOOL_PREFIX = "proxy_";
+
+function parseOpenAIToolInput(argsJson) {
+  try {
+    const parsed = JSON.parse(argsJson || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function convertOpenAIFinishReason(reason) {
+  switch (reason) {
+    case "tool_calls": return "tool_use";
+    case "length": return "max_tokens";
+    case "stop": return "end_turn";
+    default: return "end_turn";
+  }
+}
+
+function openAIToClaudeMessage(responseBody) {
+  const choice = responseBody?.choices?.[0];
+  const message = choice?.message;
+  if (!message) return responseBody;
+
+  const content = [];
+  if (typeof message.content === "string" && message.content) {
+    content.push({ type: "text", text: message.content });
+  }
+  for (const toolCall of message.tool_calls || []) {
+    let toolName = toolCall.function?.name || "";
+    if (toolName.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)) toolName = toolName.slice(CLAUDE_OAUTH_TOOL_PREFIX.length);
+    content.push({
+      type: "tool_use",
+      id: toolCall.id,
+      name: toolName,
+      input: parseOpenAIToolInput(toolCall.function?.arguments),
+    });
+  }
+
+  return {
+    id: responseBody.id || `msg_${Date.now()}`,
+    type: "message",
+    role: "assistant",
+    model: responseBody.model || "unknown",
+    content,
+    stop_reason: convertOpenAIFinishReason(choice.finish_reason),
+    stop_sequence: null,
+    usage: {
+      input_tokens: responseBody.usage?.prompt_tokens || 0,
+      output_tokens: responseBody.usage?.completion_tokens || 0,
+    },
+  };
+}
+
 /**
- * Translate non-streaming response body from provider format → OpenAI format.
+ * Translate non-streaming response body from provider format → client format.
  */
 export function translateNonStreamingResponse(responseBody, targetFormat, sourceFormat) {
-  if (targetFormat === sourceFormat || targetFormat === FORMATS.OPENAI) return responseBody;
+  if (targetFormat === sourceFormat) return responseBody;
+  if (targetFormat === FORMATS.OPENAI) {
+    if (sourceFormat === FORMATS.CLAUDE) return openAIToClaudeMessage(responseBody);
+    return responseBody;
+  }
 
   // Gemini / Antigravity
   if (targetFormat === FORMATS.GEMINI || targetFormat === FORMATS.ANTIGRAVITY || targetFormat === FORMATS.GEMINI_CLI || targetFormat === FORMATS.VERTEX) {
@@ -165,36 +224,26 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
     ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
     : responseBody;
 
-  // Fix finish_reason for tool_calls: some providers return non-standard values (e.g. "other")
-  if (translatedResponse?.choices?.[0]) {
+  if (translatedResponse?.choices) {
     const choice = translatedResponse.choices[0];
-    const msg = choice.message;
+    const msg = choice?.message;
     const hasToolCalls = Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0;
     if (hasToolCalls && choice.finish_reason !== "tool_calls") {
       choice.finish_reason = "tool_calls";
     }
-  }
 
-  // Ensure OpenAI-required fields
-  if (!translatedResponse.object) translatedResponse.object = "chat.completion";
-  if (!translatedResponse.created) translatedResponse.created = Math.floor(Date.now() / 1000);
+    if (!translatedResponse.object) translatedResponse.object = "chat.completion";
+    if (!translatedResponse.created) translatedResponse.created = Math.floor(Date.now() / 1000);
 
-  // Strip Azure-specific fields
-  delete translatedResponse.prompt_filter_results;
-  if (translatedResponse?.choices) {
-    for (const choice of translatedResponse.choices) delete choice.content_filter_results;
+    delete translatedResponse.prompt_filter_results;
+    for (const item of translatedResponse.choices) {
+      delete item.content_filter_results;
+      if (item?.message) delete item.message.reasoning_content;
+    }
   }
 
   if (translatedResponse?.usage) {
     translatedResponse.usage = filterUsageForFormat(addBufferToUsage(translatedResponse.usage), sourceFormat);
-  }
-
-  // Strip reasoning_content — some clients (e.g. Firecrawl AI SDK) have JSON parsers that
-  // break on this non-standard field, even though OpenAI allows it in extensions.
-  if (translatedResponse?.choices) {
-    for (const choice of translatedResponse.choices) {
-      if (choice?.message) delete choice.message.reasoning_content;
-    }
   }
 
   reqLogger.logConvertedResponse(translatedResponse);

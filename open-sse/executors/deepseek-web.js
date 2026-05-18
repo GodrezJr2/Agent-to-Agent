@@ -272,8 +272,16 @@ export function detectToolCall(text) {
   let parsed;
   let toolName;
 
+  const jsonCandidate = raw.startsWith("{")
+    ? raw
+    : raw.match(/^"tool"\s*:/)
+      ? `{${raw}`
+      : raw.match(/^tool"\s*:/)
+        ? `{"${raw}`
+        : raw;
+
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(jsonCandidate);
     toolName = parsed?.tool;
     parsed = parsed?.args;
   } catch {

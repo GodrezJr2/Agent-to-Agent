@@ -226,6 +226,18 @@ describe("detectToolCall", () => {
     });
   });
 
+  it("turns clipped JSON tool response into OpenAI tool call", () => {
+    const call = detectToolCall('tool":"Bash","args":{"command":"ls","description":"List current directory"}}');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Bash",
+        arguments: JSON.stringify({ command: "ls", description: "List current directory" }),
+      },
+    });
+  });
+
   it("returns null for normal prose", () => {
     expect(detectToolCall("hello world")).toBeNull();
   });
