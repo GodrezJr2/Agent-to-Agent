@@ -269,23 +269,24 @@ function parseLooseToolArgs(text) {
 
 export function detectToolCall(text) {
   const raw = String(text || "").trim();
+  const unwrapped = raw.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
   let parsed;
   let toolName;
 
-  const jsonCandidate = raw.startsWith("{")
-    ? raw
-    : raw.match(/^"tool"\s*:/)
-      ? `{${raw}`
-      : raw.match(/^tool"\s*:/)
-        ? `{"${raw}`
-        : raw;
+  const jsonCandidate = unwrapped.startsWith("{")
+    ? unwrapped
+    : unwrapped.match(/^"tool"\s*:/)
+      ? `{${unwrapped}`
+      : unwrapped.match(/^tool"\s*:/)
+        ? `{"${unwrapped}`
+        : unwrapped;
 
   try {
     parsed = JSON.parse(jsonCandidate);
     toolName = parsed?.tool;
-    parsed = parsed?.args;
+    parsed = parsed?.args || parsed?.arguments;
   } catch {
-    const match = raw.match(/^<?tool_call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool_call>)?$/);
+    const match = unwrapped.match(/^<?tool_call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool_call>)?$/);
     if (!match) return null;
     toolName = match[1];
     parsed = parseLooseToolArgs(match[2]);

@@ -238,6 +238,18 @@ describe("detectToolCall", () => {
     });
   });
 
+  it("turns fenced JSON tool response with arguments into OpenAI tool call", () => {
+    const call = detectToolCall('```json\n{\n  "tool": "Bash",\n  "arguments": {\n    "command": "pwd",\n    "description": "Print working directory"\n  }\n}\n```');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Bash",
+        arguments: JSON.stringify({ command: "pwd", description: "Print working directory" }),
+      },
+    });
+  });
+
   it("returns null for normal prose", () => {
     expect(detectToolCall("hello world")).toBeNull();
   });
