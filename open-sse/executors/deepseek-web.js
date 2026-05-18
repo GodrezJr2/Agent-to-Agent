@@ -286,7 +286,8 @@ export function detectToolCall(text) {
     toolName = parsed?.tool;
     parsed = parsed?.args || parsed?.arguments;
   } catch {
-    const match = unwrapped.match(/^<?tool_call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool_call>)?$/);
+    const match = unwrapped.match(/<tool_call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool_call>/)
+      || unwrapped.match(/^<?tool_call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool_call>)?$/);
     if (!match) return null;
     toolName = match[1];
     parsed = parseLooseToolArgs(match[2]);

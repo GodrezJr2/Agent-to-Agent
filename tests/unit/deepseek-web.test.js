@@ -262,6 +262,21 @@ describe("detectToolCall", () => {
     });
   });
 
+  it("turns prose with multiple Claude-style tool calls into the first OpenAI tool call", () => {
+    const call = detectToolCall(' me read the key files.\n\n<tool_call name="Read">\n{"file_path":"F:\\\\Project\\\\Deepseek Reverse Engineerr\\\\deepseek-module-42587.txt","limit":100}\n</tool_call>\n<tool_call name="Read">\n{"file_path":"F:\\\\Project\\\\Deepseek Reverse Engineerr\\\\pow-wasm.mjs"}\n</tool_call>');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Read",
+        arguments: JSON.stringify({
+          file_path: "F:\\Project\\Deepseek Reverse Engineerr\\deepseek-module-42587.txt",
+          limit: 100,
+        }),
+      },
+    });
+  });
+
   it("returns null for normal prose", () => {
     expect(detectToolCall("hello world")).toBeNull();
   });
