@@ -277,6 +277,31 @@ function parseLooseToolArgs(text) {
   return args;
 }
 
+function parseToolJsonCandidate(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+  }
+
+  let candidate = text;
+  while (candidate.endsWith("}")) {
+    candidate = candidate.slice(0, -1);
+    try {
+      return JSON.parse(candidate);
+    } catch {
+    }
+  }
+  return null;
+}
+
+function unpackToolArgs(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  if (parsed.args && typeof parsed.args === "object" && !Array.isArray(parsed.args)) return parsed.args;
+  if (parsed.arguments && typeof parsed.arguments === "object" && !Array.isArray(parsed.arguments)) return parsed.arguments;
+  const { tool, ...args } = parsed;
+  return Object.keys(args).length > 0 ? args : null;
+}
+
 export function detectToolCall(text) {
   const raw = String(text || "").trim();
   const unwrapped = raw.replace(/^\s*```(?:json)?\s*/i, "").replace(/^\s*json\s+/i, "").replace(/\s*```\s*$/i, "").trim();
@@ -291,11 +316,11 @@ export function detectToolCall(text) {
         ? `{"${unwrapped}`
         : unwrapped;
 
-  try {
-    parsed = JSON.parse(jsonCandidate);
-    toolName = parsed?.tool;
-    parsed = parsed?.args || parsed?.arguments;
-  } catch {
+  const parsedJson = parseToolJsonCandidate(jsonCandidate);
+  if (parsedJson) {
+    toolName = parsedJson?.tool;
+    parsed = unpackToolArgs(parsedJson);
+  } else {
     const match = unwrapped.match(/<tool_call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool_call>/)
       || unwrapped.match(/^<?tool_call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool_call>)?$/);
     if (!match) return null;

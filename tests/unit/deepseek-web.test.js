@@ -292,6 +292,21 @@ describe("detectToolCall", () => {
     });
   });
 
+  it("turns clipped flat JSON tool calls into OpenAI tool calls", () => {
+    const call = detectToolCall('tool":"Read","file_path":"C:\\\\Users\\\\Administrator\\\\AppData\\\\Roaming\\\\npm\\\\claude-dsw.cmd","limit":2}}');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Read",
+        arguments: JSON.stringify({
+          file_path: "C:\\Users\\Administrator\\AppData\\Roaming\\npm\\claude-dsw.cmd",
+          limit: 2,
+        }),
+      },
+    });
+  });
+
   it("returns null for normal prose", () => {
     expect(detectToolCall("hello world")).toBeNull();
   });
