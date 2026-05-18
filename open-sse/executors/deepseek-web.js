@@ -198,6 +198,35 @@ function parseSseFrames(text) {
   return frames;
 }
 
+function rebuildDeepSeekText(state) {
+  state.content = "";
+  state.reasoningContent = "";
+  for (const fragment of state.fragments) {
+    if (!fragment) continue;
+    if (fragment.type === "THINK") state.reasoningContent += fragment.content || "";
+    else if (fragment.type === "RESPONSE" || fragment.type === "TEMPLATE_RESPONSE") state.content += fragment.content || "";
+  }
+}
+
+function addDeepSeekFragment(state, fragment) {
+  const item = { type: fragment.type, content: fragment.content || "" };
+  state.fragments.push(item);
+  state.currentFragmentIndex = state.fragments.length - 1;
+  state.currentFragmentType = item.type;
+  rebuildDeepSeekText(state);
+}
+
+function updateDeepSeekFragmentContent(state, rawIndex, value, op) {
+  const index = rawIndex === -1 ? state.currentFragmentIndex : rawIndex;
+  if (index == null || index < 0) return;
+  const fragment = state.fragments[index] || { type: state.currentFragmentType, content: "" };
+  fragment.content = op === "APPEND" ? `${fragment.content || ""}${value || ""}` : (value || "");
+  state.fragments[index] = fragment;
+  state.currentFragmentIndex = index;
+  state.currentFragmentType = fragment.type;
+  rebuildDeepSeekText(state);
+}
+
 function applyDeepSeekPayload(payload, state) {
   if (payload.request_message_id) state.requestMessageId = payload.request_message_id;
   if (payload.response_message_id) state.responseMessageId = payload.response_message_id;
@@ -205,32 +234,17 @@ function applyDeepSeekPayload(payload, state) {
 
   const value = payload.v;
   if (value?.response?.fragments?.length) {
-    for (const fragment of value.response.fragments) {
-      state.currentFragmentType = fragment.type;
-      if (fragment.type === "THINK") state.reasoningContent += fragment.content || "";
-      else if (fragment.type === "RESPONSE" || fragment.type === "TEMPLATE_RESPONSE") state.content += fragment.content || "";
-    }
+    for (const fragment of value.response.fragments) addDeepSeekFragment(state, fragment);
   } else if (typeof value === "string" && !payload.p) {
-    if (state.currentFragmentType === "THINK") state.reasoningContent += value;
-    else state.content += value;
+    updateDeepSeekFragmentContent(state, -1, value, "APPEND");
   }
 
   if (payload.p === "response/fragments" && Array.isArray(payload.v)) {
-    for (const fragment of payload.v) {
-      state.currentFragmentType = fragment.type;
-      if (fragment.type === "THINK") state.reasoningContent += fragment.content || "";
-      else if (fragment.type === "RESPONSE" || fragment.type === "TEMPLATE_RESPONSE") state.content += fragment.content || "";
-    }
+    for (const fragment of payload.v) addDeepSeekFragment(state, fragment);
   }
 
-  if (payload.p === "response/fragments/-1/content") {
-    const mode = payload.o === "APPEND" ? "append" : "set";
-    if (state.currentFragmentType === "THINK") {
-      state.reasoningContent = mode === "append" ? state.reasoningContent + (payload.v || "") : (payload.v || "");
-    } else {
-      state.content = mode === "append" ? state.content + (payload.v || "") : (payload.v || "");
-    }
-  }
+  const contentPath = typeof payload.p === "string" ? payload.p.match(/^response\/fragments\/(-?\d+)\/content$/) : null;
+  if (contentPath) updateDeepSeekFragmentContent(state, Number(contentPath[1]), payload.v, payload.o);
 
   if (payload.p === "response" && payload.o === "BATCH" && Array.isArray(payload.v)) {
     for (const item of payload.v) {
@@ -248,6 +262,8 @@ export function parseDeepSeekSse(text) {
     responseMessageId: null,
     modelType: null,
     currentFragmentType: "RESPONSE",
+    currentFragmentIndex: null,
+    fragments: [],
   };
 
   for (const frame of parseSseFrames(text)) {

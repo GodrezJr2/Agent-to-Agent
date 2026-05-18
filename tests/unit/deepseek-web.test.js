@@ -187,6 +187,19 @@ describe("parseDeepSeekSse", () => {
       modelType: "expert",
     });
   });
+
+  it("applies indexed RESPONSE fragment content before append chunks", () => {
+    const sse = [
+      "data: {\"v\":{\"response\":{\"fragments\":[{\"type\":\"RESPONSE\",\"content\":\"\"}]}}}",
+      "",
+      "data: {\"p\":\"response/fragments/0/content\",\"o\":\"SET\",\"v\":\"p\"}",
+      "",
+      "data: {\"p\":\"response/fragments/-1/content\",\"o\":\"APPEND\",\"v\":\"ong\"}",
+      "",
+    ].join("\n");
+
+    expect(parseDeepSeekSse(sse).content).toBe("pong");
+  });
 });
 
 describe("detectToolCall", () => {

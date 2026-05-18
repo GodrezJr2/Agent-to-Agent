@@ -1,3 +1,20 @@
+# v0.4.41 (2026-05-18)
+
+## Features
+- Add DeepSeek Web provider with browser-token authentication, PoW support, and model variants for Instant/Expert, Search, and DeepThink modes.
+- Add `claude-dsw` workflow support for running Claude Code through DeepSeek Web via 9router.
+- Show DeepSeek Web in the Providers dashboard as an API-key style provider.
+
+## Improvements
+- Reuse DeepSeek Web chat sessions while conversation history grows, and start a new session when history resets.
+- Harden DeepSeek Web tool output parsing for JSON, fenced JSON, Claude-style XML tool calls, parameter-style arguments, clipped JSON, prose-wrapped calls, and multiple tool calls.
+- Retry once with a repair prompt when DeepSeek Web returns malformed tool intent.
+
+## Fixes
+- Fix DeepSeek Web standalone WASM path resolution in bundled Docker builds.
+- Fix Claude `/v1/messages` non-streaming responses from OpenAI-format providers so tool calls translate back to Claude `tool_use` blocks.
+- Fix DeepSeek Web SSE parsing for indexed fragment content paths so leading chunks are not dropped.
+
 # v0.4.25 (2026-05-09)
 
 ## Features
