@@ -198,6 +198,34 @@ describe("detectToolCall", () => {
     expect(call.id).toMatch(/^call_/);
   });
 
+  it("turns Claude-style tool_call text into OpenAI tool call", () => {
+    const call = detectToolCall('<tool_call name="Bash">\n{"command":"Get-ChildItem -Path \"F:\\\\Project\\\\Deepseek Reverse Engineerr\" -Recurse","description":"List all files in workspace recursively"}\n</tool_call>');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Bash",
+        arguments: JSON.stringify({
+          command: 'Get-ChildItem -Path "F:\\Project\\Deepseek Reverse Engineerr" -Recurse',
+          description: "List all files in workspace recursively",
+        }),
+      },
+    });
+    expect(call.id).toMatch(/^call_/);
+  });
+
+  it("turns unclosed Claude-style tool_call text into OpenAI tool call", () => {
+    const call = detectToolCall('tool_call name="Bash">\n{"command":"Get-ChildItem","description":"List files"}');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Bash",
+        arguments: JSON.stringify({ command: "Get-ChildItem", description: "List files" }),
+      },
+    });
+  });
+
   it("returns null for normal prose", () => {
     expect(detectToolCall("hello world")).toBeNull();
   });

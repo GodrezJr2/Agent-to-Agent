@@ -233,20 +233,63 @@ export function parseDeepSeekSse(text) {
   };
 }
 
-export function detectToolCall(text) {
-  let parsed;
+function parseLooseToolArgs(text) {
   try {
-    parsed = JSON.parse(String(text || "").trim());
+    return JSON.parse(text);
   } catch {
-    return null;
   }
-  if (!parsed || typeof parsed.tool !== "string" || typeof parsed.args !== "object" || parsed.args == null || Array.isArray(parsed.args)) return null;
+
+  const inner = String(text || "").trim().replace(/^\{\s*|\s*\}$/g, "");
+  const keyRe = /(^|,)\s*"([^"]+)"\s*:/g;
+  const matches = [...inner.matchAll(keyRe)];
+  if (matches.length === 0) return null;
+
+  const args = {};
+  for (let i = 0; i < matches.length; i++) {
+    const match = matches[i];
+    const key = match[2];
+    const valueStart = match.index + match[0].length;
+    const valueEnd = matches[i + 1]?.index ?? inner.length;
+    const rawValue = inner.slice(valueStart, valueEnd).trim();
+
+    if (rawValue.startsWith('"') && rawValue.endsWith('"')) {
+      args[key] = rawValue.slice(1, -1).replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/\\(["\\/bfnrt])/g, (_, ch) => ({ b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" }[ch] ?? ch));
+    } else if (rawValue === "true" || rawValue === "false") {
+      args[key] = rawValue === "true";
+    } else if (rawValue === "null") {
+      args[key] = null;
+    } else if (/^-?\d+(?:\.\d+)?$/.test(rawValue)) {
+      args[key] = Number(rawValue);
+    } else {
+      args[key] = rawValue;
+    }
+  }
+  return args;
+}
+
+export function detectToolCall(text) {
+  const raw = String(text || "").trim();
+  let parsed;
+  let toolName;
+
+  try {
+    parsed = JSON.parse(raw);
+    toolName = parsed?.tool;
+    parsed = parsed?.args;
+  } catch {
+    const match = raw.match(/^<?tool_call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool_call>)?$/);
+    if (!match) return null;
+    toolName = match[1];
+    parsed = parseLooseToolArgs(match[2]);
+  }
+
+  if (typeof toolName !== "string" || typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) return null;
   return {
     id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
     type: "function",
     function: {
-      name: parsed.tool,
-      arguments: JSON.stringify(parsed.args),
+      name: toolName,
+      arguments: JSON.stringify(parsed),
     },
   };
 }
