@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   buildDeepSeekHeaders,
@@ -55,6 +56,12 @@ describe("resolveDeepSeekWasmPath", () => {
     };
 
     expect(resolveDeepSeekWasmPath(urlLike)).toContain("deepseek-pow.wasm");
+  });
+
+  it("falls back to cwd open-sse path when module URL is not file-based", () => {
+    const resolved = resolveDeepSeekWasmPath("webpack://_N_E/open-sse/executors/deepseek-pow.wasm");
+
+    expect(resolved).toBe(path.join(process.cwd(), "open-sse", "executors", "deepseek-pow.wasm"));
   });
 });
 

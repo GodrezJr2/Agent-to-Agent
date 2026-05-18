@@ -1,3 +1,4 @@
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
@@ -272,7 +273,9 @@ async function streamToText(body) {
 }
 
 export function resolveDeepSeekWasmPath(wasmUrl = new URL("./deepseek-pow.wasm", import.meta.url)) {
-  return fileURLToPath(String(wasmUrl));
+  const asString = String(wasmUrl);
+  if (!asString.startsWith("file:")) return path.join(process.cwd(), "open-sse", "executors", "deepseek-pow.wasm");
+  return fileURLToPath(asString);
 }
 
 let _wasmInstancePromise = null;
