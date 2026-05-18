@@ -576,6 +576,48 @@ describe("DeepSeekWebExecutor.execute", () => {
     });
   });
 
+  it("reprompts once when DeepSeek returns parameter-only tool intent", async () => {
+    let completionNo = 0;
+    global.fetch = vi.fn(async (url, opts) => {
+      calls.push({ url, opts, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { chat_session: { id: "session-1" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "challenge-1", salt: "salt-1", signature: "sig-1", difficulty: 3, expire_at: 123456, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/completion")) {
+        completionNo += 1;
+        if (completionNo === 1) {
+          return sseResponse('data: {"v":{"response":{"fragments":[{"type":"RESPONSE","content":"Write file.\\n\\n<parameter name=\\"file_path\\">index.html</parameter>\\n<parameter name=\\"content\\">hello</parameter>\\n</invoke>"}]}}}\n\n');
+        }
+        return sseResponse('data: {"v":{"response":{"fragments":[{"type":"RESPONSE","content":"{\\"tool\\":\\"Write\\",\\"args\\":{\\"file_path\\":\\"index.html\\",\\"content\\":\\"hello\\"}}"}]}}}\n\n');
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    const { response } = await exec.execute({
+      model: "deepseek-web/expert-deepthink-search",
+      body: {
+        messages: [{ role: "user", content: "write index" }],
+        tools: [{ type: "function", function: { name: "Write", parameters: { type: "object", properties: { file_path: { type: "string" }, content: { type: "string" } } } } }],
+        stream: false,
+      },
+      stream: false,
+      credentials: { apiKey: "tok-1" },
+    });
+
+    const json = await response.json();
+    const completionCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/completion"));
+    expect(completionCalls).toHaveLength(2);
+    expect(completionCalls[1].body.prompt).toContain("Return exactly one valid tool JSON object");
+    expect(json.choices[0].message.tool_calls[0].function).toMatchObject({
+      name: "Write",
+      arguments: JSON.stringify({ file_path: "index.html", content: "hello" }),
+    });
+  });
+
   it("reprompts once when DeepSeek returns an empty completion", async () => {
     let completionNo = 0;
     global.fetch = vi.fn(async (url, opts) => {

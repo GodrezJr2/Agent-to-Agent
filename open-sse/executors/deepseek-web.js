@@ -545,7 +545,7 @@ function looksLikeMalformedToolIntent(content, body = {}) {
   if (!Array.isArray(body.tools) || body.tools.length === 0) return false;
   const text = String(content || "");
   if (detectToolCalls(text).length > 0) return false;
-  return /<\/?tool(?:[-_]call)?\b|\btool\s*[:=]|"tool"\s*:|\bargs\s*[:=]|\barguments\s*[:=]/i.test(text);
+  return /<\/?tool(?:[-_]call)?\b|<parameter\b|<\/invoke\b|\btool\s*[:=]|"tool"\s*:|\bargs\s*[:=]|\barguments\s*[:=]/i.test(text);
 }
 
 function buildToolRepairPrompt(content, body = {}) {

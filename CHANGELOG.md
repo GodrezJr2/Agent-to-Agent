@@ -1,3 +1,8 @@
+# v0.4.45 (2026-05-19)
+
+## Fixes
+- Fix DeepSeek Web parameter-only malformed tool output so Claude Code repairs the request and executes Write-style tool calls instead of printing parameters as text.
+
 # v0.4.44 (2026-05-19)
 
 ## Fixes
