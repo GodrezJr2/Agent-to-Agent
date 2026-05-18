@@ -168,6 +168,7 @@ export const APIKEY_PROVIDERS = {
 export const WEB_COOKIE_PROVIDERS = {
   "grok-web": { id: "grok-web", alias: "gw", name: "Grok Web (Subscription)", icon: "auto_awesome", color: "#1DA1F2", textIcon: "GW", website: "https://grok.com", authType: "cookie", authHint: "Paste your sso= cookie value from grok.com", passthroughModels: true, serviceKinds: ["llm"] },
   "perplexity-web": { id: "perplexity-web", alias: "pw", name: "Perplexity Web (Pro/Max)", icon: "search", color: "#20808D", textIcon: "PW", website: "https://www.perplexity.ai", authType: "cookie", authHint: "Paste your __Secure-next-auth.session-token cookie value from perplexity.ai", serviceKinds: ["llm"] },
+  "deepseek-web": { id: "deepseek-web", alias: "dsw", name: "DeepSeek Web", icon: "auto_awesome", color: "#4D6BFE", textIcon: "DS", website: "https://chat.deepseek.com", authType: "apikey", authHint: "Paste the Bearer token value from chat.deepseek.com network requests", serviceKinds: ["llm"] },
 };
 
 // Media provider kinds — each kind maps to a route and endpoint config

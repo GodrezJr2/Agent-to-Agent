@@ -373,6 +373,11 @@ export const PROVIDERS = {
     format: "perplexity-web",
     authType: "cookie"
   },
+  "deepseek-web": {
+    baseUrl: "https://chat.deepseek.com/api/v0/chat/completion",
+    format: "openai",
+    authType: "bearer"
+  },
   azure: {
     baseUrl: "",
     format: "openai",

@@ -16,6 +16,7 @@ import {
   KILOCODE_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
+import { probeDeepSeekWebToken } from "open-sse/executors/deepseek-web.js";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -559,6 +560,11 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
       case "chutes": {
         const res = await fetchWithConnectionProxy("https://llm.chutes.ai/v1/models", { headers: { Authorization: `Bearer ${connection.apiKey}` } }, effectiveProxy);
         return { valid: res.ok, error: res.ok ? null : "Invalid API key" };
+      }
+      case "deepseek-web": {
+        return await probeDeepSeekWebToken(connection.apiKey, {
+          fetchImpl: (url, options) => fetchWithConnectionProxy(url, options, effectiveProxy),
+        });
       }
       case "grok-web": {
         const token = connection.apiKey.startsWith("sso=") ? connection.apiKey.slice(4) : connection.apiKey;

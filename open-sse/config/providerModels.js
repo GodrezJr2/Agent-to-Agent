@@ -580,6 +580,16 @@ export const PROVIDER_MODELS = {
     { id: "pplx-opus", name: "Claude Opus 4.6 (via Perplexity)" },
     { id: "pplx-nemotron", name: "Nemotron 3 Super (via Perplexity)" },
   ],
+  "deepseek-web": [
+    { id: "instant", name: "DeepSeek Instant" },
+    { id: "instant-search", name: "DeepSeek Instant + Search" },
+    { id: "instant-deepthink", name: "DeepSeek Instant + DeepThink" },
+    { id: "instant-deepthink-search", name: "DeepSeek Instant + DeepThink + Search" },
+    { id: "expert", name: "DeepSeek Expert" },
+    { id: "expert-search", name: "DeepSeek Expert + Search" },
+    { id: "expert-deepthink", name: "DeepSeek Expert + DeepThink" },
+    { id: "expert-deepthink-search", name: "DeepSeek Expert + DeepThink + Search" },
+  ],
 
   // TTS entries are loaded from ttsModels.js via buildTtsProviderModels()
   ...buildTtsProviderModels(),

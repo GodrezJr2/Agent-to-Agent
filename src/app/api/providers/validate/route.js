@@ -6,6 +6,7 @@ import { resolveOllamaLocalHost, PROVIDERS } from "open-sse/config/providers.js"
 import { openaiToCommandCode } from "open-sse/translator/request/openai-to-commandcode.js";
 import { PROVIDER_ENDPOINTS } from "@/shared/constants/config";
 import { normalizeProviderId } from "@/lib/providerNormalization";
+import { probeDeepSeekWebToken } from "open-sse/executors/deepseek-web.js";
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
 // Returns true if API key is accepted (status !== 401 && !== 403).
@@ -479,6 +480,13 @@ export async function POST(request) {
             );
             isValid = probeRes.status !== 401 && probeRes.status !== 403;
           }
+          break;
+        }
+
+        case "deepseek-web": {
+          const result = await probeDeepSeekWebToken(apiKey);
+          isValid = result.valid;
+          error = result.error;
           break;
         }
 
