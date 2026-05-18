@@ -1,3 +1,8 @@
+# v0.4.47 (2026-05-19)
+
+## Fixes
+- Fix DeepSeek Web function-style `Write(,path,content)` output so Claude Code executes file writes instead of printing the call as text.
+
 # v0.4.46 (2026-05-19)
 
 ## Fixes

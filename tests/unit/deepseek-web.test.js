@@ -400,6 +400,21 @@ describe("detectToolCall", () => {
     });
   });
 
+  it("turns function-style Write output into Write tool calls", () => {
+    const call = detectToolCall('Write(,C:\\Temp\\index.html,<!DOCTYPE html>\n<html>hello</html>\n)');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Write",
+        arguments: JSON.stringify({
+          file_path: "C:\\Temp\\index.html",
+          content: "<!DOCTYPE html>\n<html>hello</html>",
+        }),
+      },
+    });
+  });
+
   it("returns null for normal prose", () => {
     expect(detectToolCall("hello world")).toBeNull();
   });

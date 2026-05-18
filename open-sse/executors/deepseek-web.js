@@ -362,6 +362,15 @@ function parseFileWriteArgs(match) {
   };
 }
 
+function parseFunctionStyleWriteArgs(text) {
+  const match = String(text || "").match(/^Write\(,([\s\S]*?),([\s\S]*)\)$/);
+  if (!match) return null;
+  return {
+    file_path: coerceToolValue(match[1]),
+    content: match[2].trim(),
+  };
+}
+
 function buildToolCall(toolName, parsed) {
   if (typeof toolName !== "string" || typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) return null;
   return {
@@ -387,6 +396,8 @@ function parseToolCallText(text) {
   const unwrapped = unwrapToolText(text);
   const fileWriteMatch = [...unwrapped.matchAll(FILE_WRITE_RE)][0];
   if (fileWriteMatch) return buildToolCall("Write", parseFileWriteArgs(fileWriteMatch));
+  const functionStyleWriteArgs = parseFunctionStyleWriteArgs(unwrapped);
+  if (functionStyleWriteArgs) return buildToolCall("Write", functionStyleWriteArgs);
 
   let parsed;
   let toolName;
