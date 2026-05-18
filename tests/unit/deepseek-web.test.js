@@ -5,6 +5,7 @@ import {
   buildDeepSeekPrompt,
   buildPowHeaderValue,
   detectToolCall,
+  detectToolCalls,
   mapDeepSeekModel,
   parseDeepSeekSse,
   probeDeepSeekWebToken,
@@ -310,6 +311,20 @@ describe("detectToolCall", () => {
   it("returns null for normal prose", () => {
     expect(detectToolCall("hello world")).toBeNull();
   });
+
+  it("turns multiple embedded Claude-style tool calls into OpenAI tool calls", () => {
+    const calls = detectToolCalls('Read both files.\n<tool_call name="Read">\n{"file_path":"one.txt"}\n</tool_call>\n<tool_call name="Read">\n{"file_path":"two.txt","limit":5}\n</tool_call>');
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({
+      type: "function",
+      function: { name: "Read", arguments: JSON.stringify({ file_path: "one.txt" }) },
+    });
+    expect(calls[1]).toMatchObject({
+      type: "function",
+      function: { name: "Read", arguments: JSON.stringify({ file_path: "two.txt", limit: 5 }) },
+    });
+  });
 });
 
 describe("DeepSeekWebExecutor.execute", () => {
@@ -460,5 +475,50 @@ describe("DeepSeekWebExecutor.execute", () => {
 
     expect(calls.filter((call) => call.url.endsWith("/api/v0/chat_session/create"))).toHaveLength(2);
     expect(calls.filter((call) => call.url.endsWith("/api/v0/chat/completion")).map((call) => call.body.chat_session_id)).toEqual(["session-1", "session-2"]);
+  });
+
+  it("reprompts once when DeepSeek returns malformed tool intent", async () => {
+    let completionNo = 0;
+    global.fetch = vi.fn(async (url, opts) => {
+      calls.push({ url, opts, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        return new Response(JSON.stringify({
+          code: 0,
+          data: { biz_code: 0, biz_data: { chat_session: { id: "session-1" } } },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "challenge-1", salt: "salt-1", signature: "sig-1", difficulty: 3, expire_at: 123456, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/completion")) {
+        completionNo += 1;
+        if (completionNo === 1) {
+          return sseResponse('data: {"v":{"response":{"fragments":[{"type":"RESPONSE","content":"I need a tool. <tool_call name=Read> file_path: package.json"}]}}}\n\n');
+        }
+        return sseResponse('data: {"v":{"response":{"fragments":[{"type":"RESPONSE","content":"{\\"tool\\":\\"Read\\",\\"args\\":{\\"file_path\\":\\"package.json\\"}}"}]}}}\n\n');
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    const { response } = await exec.execute({
+      model: "deepseek-web/expert-deepthink-search",
+      body: {
+        messages: [{ role: "user", content: "read package.json" }],
+        tools: [{ type: "function", function: { name: "Read", parameters: { type: "object", properties: { file_path: { type: "string" } } } } }],
+        stream: false,
+      },
+      stream: false,
+      credentials: { apiKey: "tok-1" },
+    });
+
+    const json = await response.json();
+    const completionCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/completion"));
+    expect(completionCalls).toHaveLength(2);
+    expect(completionCalls[1].body.prompt).toContain("Return exactly one valid tool JSON object");
+    expect(json.choices[0].message.tool_calls[0].function).toMatchObject({
+      name: "Read",
+      arguments: JSON.stringify({ file_path: "package.json" }),
+    });
   });
 });

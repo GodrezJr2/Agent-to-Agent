@@ -337,9 +337,29 @@ function unpackToolArgs(parsed) {
   return Object.keys(args).length > 0 ? args : null;
 }
 
-export function detectToolCall(text) {
-  const raw = String(text || "").trim();
-  const unwrapped = raw.replace(/^\s*```(?:json)?\s*/i, "").replace(/^\s*json\s+/i, "").replace(/\s*```\s*$/i, "").trim();
+function buildToolCall(toolName, parsed) {
+  if (typeof toolName !== "string" || typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) return null;
+  return {
+    id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
+    type: "function",
+    function: {
+      name: toolName,
+      arguments: JSON.stringify(parsed),
+    },
+  };
+}
+
+function unwrapToolText(text) {
+  return String(text || "")
+    .trim()
+    .replace(/^\s*```(?:json)?\s*/i, "")
+    .replace(/^\s*json\s+/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+}
+
+function parseToolCallText(text) {
+  const unwrapped = unwrapToolText(text);
   let parsed;
   let toolName;
 
@@ -363,15 +383,24 @@ export function detectToolCall(text) {
     parsed = parseLooseToolArgs(match[2]);
   }
 
-  if (typeof toolName !== "string" || typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) return null;
-  return {
-    id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
-    type: "function",
-    function: {
-      name: toolName,
-      arguments: JSON.stringify(parsed),
-    },
-  };
+  return buildToolCall(toolName, parsed);
+}
+
+export function detectToolCalls(text) {
+  const unwrapped = unwrapToolText(text);
+  const xmlMatches = [...unwrapped.matchAll(/<tool_call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool_call>/g)];
+  if (xmlMatches.length > 1) {
+    return xmlMatches
+      .map((match) => buildToolCall(match[1], parseLooseToolArgs(match[2])))
+      .filter(Boolean);
+  }
+
+  const call = parseToolCallText(unwrapped);
+  return call ? [call] : [];
+}
+
+export function detectToolCall(text) {
+  return detectToolCalls(text)[0] || null;
 }
 
 function sseChunk(data) {
@@ -477,11 +506,11 @@ export async function probeDeepSeekWebToken(apiKey, options = {}) {
 }
 
 function buildOpenAIResponse({ model, content, reasoningContent, usage, prompt }) {
-  const toolCall = detectToolCall(content);
-  const message = toolCall
-    ? { role: "assistant", content: null, tool_calls: [toolCall] }
+  const toolCalls = detectToolCalls(content);
+  const message = toolCalls.length > 0
+    ? { role: "assistant", content: null, tool_calls: toolCalls }
     : { role: "assistant", content };
-  if (reasoningContent && !toolCall) message.reasoning_content = reasoningContent;
+  if (reasoningContent && toolCalls.length === 0) message.reasoning_content = reasoningContent;
 
   const promptTokens = Math.ceil((prompt || "").length / 4);
   const completionTokens = usage?.completion_tokens || Math.ceil((content || "").length / 4);
@@ -491,9 +520,28 @@ function buildOpenAIResponse({ model, content, reasoningContent, usage, prompt }
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
     model,
-    choices: [{ index: 0, message, finish_reason: toolCall ? "tool_calls" : "stop", logprobs: null }],
+    choices: [{ index: 0, message, finish_reason: toolCalls.length > 0 ? "tool_calls" : "stop", logprobs: null }],
     usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens },
   };
+}
+
+function looksLikeMalformedToolIntent(content, body = {}) {
+  if (!Array.isArray(body.tools) || body.tools.length === 0) return false;
+  const text = String(content || "");
+  if (detectToolCalls(text).length > 0) return false;
+  return /<\/?tool_call|\btool\s*[:=]|"tool"\s*:|\bargs\s*[:=]|\barguments\s*[:=]/i.test(text);
+}
+
+function buildToolRepairPrompt(content, body = {}) {
+  return [
+    "Your previous response looked like a tool call but was invalid.",
+    "Return exactly one valid tool JSON object and no markdown, no prose.",
+    '{"tool":"tool_name","args":{}}',
+    "Available tools:",
+    formatTools(body.tools),
+    "Previous response:",
+    String(content || "").slice(0, 2000),
+  ].join("\n");
 }
 
 function buildStreamingResponse(parsed, model, prompt) {
@@ -503,9 +551,9 @@ function buildStreamingResponse(parsed, model, prompt) {
   return new ReadableStream({
     start(controller) {
       controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null, logprobs: null }] })));
-      const toolCall = detectToolCall(parsed.content);
-      if (toolCall) {
-        controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: toolCall.id, type: "function", function: { name: toolCall.function.name, arguments: toolCall.function.arguments } }] }, finish_reason: null, logprobs: null }] })));
+      const toolCalls = detectToolCalls(parsed.content);
+      if (toolCalls.length > 0) {
+        controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { tool_calls: toolCalls.map((toolCall, index) => ({ index, id: toolCall.id, type: "function", function: { name: toolCall.function.name, arguments: toolCall.function.arguments } })) }, finish_reason: null, logprobs: null }] })));
         controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls", logprobs: null }] })));
       } else {
         if (parsed.reasoningContent) controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { reasoning_content: parsed.reasoningContent }, finish_reason: null, logprobs: null }] })));
@@ -579,17 +627,25 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       };
 
       log?.info?.("DEEPSEEK-WEB", `Query to ${model}, len=${prompt.length}`);
-      const completionResponse = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(finalBody), signal });
-      if (!completionResponse.ok) return this.errorResponse(completionResponse.status, "DeepSeek completion failed", headers, finalBody);
-      if (!completionResponse.body) return this.errorResponse(502, "DeepSeek returned empty response body", headers, finalBody);
+      let requestBody = finalBody;
+      let completionResponse = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
+      if (!completionResponse.ok) return this.errorResponse(completionResponse.status, "DeepSeek completion failed", headers, requestBody);
+      if (!completionResponse.body) return this.errorResponse(502, "DeepSeek returned empty response body", headers, requestBody);
 
-      const sseText = await streamToText(completionResponse.body);
-      const parsed = parseDeepSeekSse(sseText);
+      let parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
+      if (looksLikeMalformedToolIntent(parsed.content, body)) {
+        requestBody = { ...finalBody, prompt: buildToolRepairPrompt(parsed.content, body) };
+        completionResponse = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
+        if (!completionResponse.ok) return this.errorResponse(completionResponse.status, "DeepSeek completion failed", headers, requestBody);
+        if (!completionResponse.body) return this.errorResponse(502, "DeepSeek returned empty response body", headers, requestBody);
+        parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
+      }
+
       const response = stream
-        ? new Response(buildStreamingResponse(parsed, model, prompt), { status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } })
-        : new Response(JSON.stringify(buildOpenAIResponse({ model, prompt, ...parsed })), { status: 200, headers: { "Content-Type": "application/json" } });
+        ? new Response(buildStreamingResponse(parsed, model, requestBody.prompt), { status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } })
+        : new Response(JSON.stringify(buildOpenAIResponse({ model, prompt: requestBody.prompt, ...parsed })), { status: 200, headers: { "Content-Type": "application/json" } });
 
-      return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: finalBody };
+      return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: requestBody };
     } catch (err) {
       log?.error?.("DEEPSEEK-WEB", err.message || String(err));
       const errResp = new Response(JSON.stringify({ error: { message: `DeepSeek Web failed: ${err.message || String(err)}`, type: "upstream_error" } }), { status: 502, headers: { "Content-Type": "application/json" } });
