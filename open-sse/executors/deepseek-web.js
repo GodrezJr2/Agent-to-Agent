@@ -560,6 +560,20 @@ function buildToolRepairPrompt(content, body = {}) {
   ].join("\n");
 }
 
+function hasDeepSeekOutput(parsed) {
+  return !!String(parsed?.content || "").trim() || !!String(parsed?.reasoningContent || "").trim();
+}
+
+function buildEmptyCompletionRetryPrompt(prompt, body = {}) {
+  return [
+    "Your previous response was empty.",
+    "Return a useful assistant response now. If a tool is needed, return exactly one valid tool JSON object and no markdown, no prose.",
+    formatTools(body.tools),
+    "Original prompt:",
+    String(prompt || "").slice(-4000),
+  ].filter(Boolean).join("\n");
+}
+
 function buildStreamingResponse(parsed, model, prompt) {
   const encoder = new TextEncoder();
   const created = Math.floor(Date.now() / 1000);
@@ -655,6 +669,15 @@ export class DeepSeekWebExecutor extends BaseExecutor {
         if (!completionResponse.ok) return this.errorResponse(completionResponse.status, "DeepSeek completion failed", headers, requestBody);
         if (!completionResponse.body) return this.errorResponse(502, "DeepSeek returned empty response body", headers, requestBody);
         parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
+      }
+
+      if (!hasDeepSeekOutput(parsed)) {
+        requestBody = { ...finalBody, prompt: buildEmptyCompletionRetryPrompt(requestBody.prompt, body) };
+        completionResponse = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
+        if (!completionResponse.ok) return this.errorResponse(completionResponse.status, "DeepSeek completion failed", headers, requestBody);
+        if (!completionResponse.body) return this.errorResponse(502, "DeepSeek returned empty response body", headers, requestBody);
+        parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
+        if (!hasDeepSeekOutput(parsed)) return this.errorResponse(502, "DeepSeek returned empty completion", headers, requestBody);
       }
 
       const response = stream

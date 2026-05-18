@@ -1,3 +1,8 @@
+# v0.4.42 (2026-05-18)
+
+## Fixes
+- Fix DeepSeek Web empty upstream completions after tool results so Claude Code retries once and surfaces an error instead of silently ending the turn.
+
 # v0.4.41 (2026-05-18)
 
 ## Features

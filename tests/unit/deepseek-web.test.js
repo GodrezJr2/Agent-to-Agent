@@ -545,4 +545,72 @@ describe("DeepSeekWebExecutor.execute", () => {
       arguments: JSON.stringify({ file_path: "package.json" }),
     });
   });
+
+  it("reprompts once when DeepSeek returns an empty completion", async () => {
+    let completionNo = 0;
+    global.fetch = vi.fn(async (url, opts) => {
+      calls.push({ url, opts, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { chat_session: { id: "session-1" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "challenge-1", salt: "salt-1", signature: "sig-1", difficulty: 3, expire_at: 123456, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/completion")) {
+        completionNo += 1;
+        if (completionNo === 1) return sseResponse("event: ready\ndata: {}\n\nevent: close\ndata: {}\n\n");
+        return sseResponse('data: {"v":{"response":{"fragments":[{"type":"RESPONSE","content":"Recovered answer"}]}}}\n\n');
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    const { response } = await exec.execute({
+      model: "deepseek-web/expert-deepthink-search",
+      body: {
+        messages: [
+          { role: "user", content: "Use Bash, then explain result" },
+          { role: "assistant", tool_calls: [{ id: "call_bash", type: "function", function: { name: "Bash", arguments: JSON.stringify({ command: "Get-ChildItem", description: "List files" }) } }] },
+          { role: "tool", tool_call_id: "call_bash", content: "Exit code 127\n/usr/bin/bash: line 1: Get-ChildItem: command not found" },
+        ],
+        stream: false,
+      },
+      stream: false,
+      credentials: { apiKey: "tok-1" },
+    });
+
+    const json = await response.json();
+    const completionCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/completion"));
+    expect(completionCalls).toHaveLength(2);
+    expect(completionCalls[1].body.prompt).toContain("Your previous response was empty");
+    expect(json.choices[0].message.content).toBe("Recovered answer");
+  });
+
+  it("returns an error when DeepSeek keeps returning empty completions", async () => {
+    global.fetch = vi.fn(async (url, opts) => {
+      calls.push({ url, opts, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { chat_session: { id: "session-1" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "challenge-1", salt: "salt-1", signature: "sig-1", difficulty: 3, expire_at: 123456, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/completion")) return sseResponse("event: ready\ndata: {}\n\nevent: close\ndata: {}\n\n");
+      return new Response("not found", { status: 404 });
+    });
+
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    const { response } = await exec.execute({
+      model: "deepseek-web/expert-deepthink-search",
+      body: { messages: [{ role: "user", content: "hello" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "tok-1" },
+    });
+
+    const json = await response.json();
+    const completionCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/completion"));
+    expect(completionCalls).toHaveLength(2);
+    expect(response.status).toBe(502);
+    expect(json.error.message).toBe("DeepSeek returned empty completion");
+  });
 });
