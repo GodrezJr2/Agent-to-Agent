@@ -149,6 +149,21 @@ export function buildDeepSeekPrompt(body = {}) {
 
   for (const message of messages) {
     const role = message.role === "developer" ? "system" : message.role;
+
+    if (role === "assistant" && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+      const toolDesc = message.tool_calls
+        .map((tc) => {
+          const args = tc.function?.arguments || "{}";
+          const compact = args.length > 80 ? args.slice(0, 80) + "…" : args;
+          return `${tc.function?.name || "unknown"}(${compact})`;
+        })
+        .join(", ");
+      historyParts.push(`assistant: [called ${toolDesc}]`);
+      const text = contentToText(message.content).trim();
+      if (text) historyParts.push(`assistant: ${text}`);
+      continue;
+    }
+
     const text = contentToText(message.content).trim();
     if (!text) continue;
 
@@ -160,7 +175,8 @@ export function buildDeepSeekPrompt(body = {}) {
     } else if (role === "assistant") {
       historyParts.push(`assistant: ${text}`);
     } else if (role === "tool") {
-      historyParts.push(`tool ${message.name || message.tool_call_id || "result"}: ${text}`);
+      const truncated = text.length > 800 ? text.slice(0, 800) + "...(truncated)" : text;
+      historyParts.push(`tool ${message.name || message.tool_call_id || "result"}: ${truncated}`);
     }
   }
 

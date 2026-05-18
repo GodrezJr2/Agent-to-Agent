@@ -155,6 +155,34 @@ describe("buildDeepSeekPrompt", () => {
     expect(prompt).toContain("To call a tool, respond with exactly one JSON object");
     expect(prompt).toContain("- list_files(path:string): List files in a directory");
   });
+
+  it("includes assistant tool_calls as history entry so DeepSeek has context", () => {
+    const prompt = buildDeepSeekPrompt({
+      messages: [
+        { role: "user", content: "make me a landing page" },
+        { role: "assistant", tool_calls: [{ id: "call_1", type: "function", function: { name: "Skill", arguments: '{"skill":"superpowers:brainstorming"}' } }] },
+        { role: "tool", tool_call_id: "call_1", content: "skill loaded" },
+      ],
+    });
+
+    expect(prompt).toContain("assistant: [called Skill(");
+    expect(prompt).toContain("superpowers:brainstorming");
+  });
+
+  it("truncates long tool results so context stays manageable", () => {
+    const longContent = "x".repeat(2000);
+    const prompt = buildDeepSeekPrompt({
+      messages: [
+        { role: "user", content: "do something" },
+        { role: "tool", tool_call_id: "call_1", content: longContent },
+      ],
+    });
+
+    const toolLine = prompt.split("\n").find((l) => l.startsWith("tool "));
+    expect(toolLine).toBeTruthy();
+    expect(toolLine.length).toBeLessThan(1200);
+    expect(toolLine).toContain("...(truncated)");
+  });
 });
 
 describe("parseDeepSeekSse", () => {

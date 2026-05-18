@@ -1,3 +1,9 @@
+# v0.4.49 (2026-05-19)
+
+## Fixes
+- Fix DeepSeek Web prompt builder missing assistant tool_call history entries so DeepSeek stops after Skill/tool calls instead of continuing.
+- Truncate long tool results (e.g. Skill documents) in DeepSeek Web prompt to prevent context overflow.
+
 # v0.4.48 (2026-05-19)
 
 ## Fixes
