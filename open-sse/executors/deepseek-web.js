@@ -371,6 +371,75 @@ function parseFunctionStyleWriteArgs(text) {
   };
 }
 
+function readJsonObject(text, startIndex) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = startIndex; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return { json: text.slice(startIndex, i + 1), end: i + 1 };
+    }
+  }
+  return null;
+}
+
+function findWriteJsonWrappers(text) {
+  const source = String(text || "");
+  const wrappers = [];
+  let searchFrom = 0;
+
+  while (searchFrom < source.length) {
+    const writeIndex = source.indexOf("Write", searchFrom);
+    if (writeIndex === -1) break;
+
+    let cursor = writeIndex + "Write".length;
+    while (/\s/.test(source[cursor] || "")) cursor += 1;
+    if (source[cursor] !== "(") {
+      searchFrom = writeIndex + 1;
+      continue;
+    }
+
+    cursor += 1;
+    while (/\s/.test(source[cursor] || "")) cursor += 1;
+    if (source[cursor] !== "{") {
+      searchFrom = writeIndex + 1;
+      continue;
+    }
+
+    const object = readJsonObject(source, cursor);
+    if (!object) break;
+
+    let closeIndex = object.end;
+    while (/\s/.test(source[closeIndex] || "")) closeIndex += 1;
+    if (source[closeIndex] !== ")") {
+      searchFrom = writeIndex + 1;
+      continue;
+    }
+
+    const parsed = parseToolJsonCandidate(object.json);
+    const args = unpackToolArgs(parsed);
+    if (args) wrappers.push({ args });
+    searchFrom = closeIndex + 1;
+  }
+
+  return wrappers;
+}
+
+function parseWriteJsonWrapperArgs(text) {
+  return findWriteJsonWrappers(text)[0]?.args || null;
+}
+
 function buildToolCall(toolName, parsed) {
   if (typeof toolName !== "string" || typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) return null;
   return {
@@ -398,6 +467,8 @@ function parseToolCallText(text) {
   if (fileWriteMatch) return buildToolCall("Write", parseFileWriteArgs(fileWriteMatch));
   const functionStyleWriteArgs = parseFunctionStyleWriteArgs(unwrapped);
   if (functionStyleWriteArgs) return buildToolCall("Write", functionStyleWriteArgs);
+  const writeJsonWrapperArgs = parseWriteJsonWrapperArgs(unwrapped);
+  if (writeJsonWrapperArgs) return buildToolCall("Write", writeJsonWrapperArgs);
 
   let parsed;
   let toolName;
@@ -438,6 +509,13 @@ export function detectToolCalls(text) {
   if (xmlMatches.length > 1) {
     return xmlMatches
       .map((match) => buildToolCall(match[1], parseLooseToolArgs(match[2])))
+      .filter(Boolean);
+  }
+
+  const writeJsonWrappers = findWriteJsonWrappers(unwrapped);
+  if (writeJsonWrappers.length > 1) {
+    return writeJsonWrappers
+      .map((wrapper) => buildToolCall("Write", wrapper.args))
       .filter(Boolean);
   }
 

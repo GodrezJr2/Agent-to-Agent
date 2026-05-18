@@ -415,6 +415,23 @@ describe("detectToolCall", () => {
     });
   });
 
+  it("turns Write JSON wrapper output into Write tool calls", () => {
+    const call = detectToolCall('Write({"file_path":"C:\\\\Temp\\\\index.html","content":"hello"})');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: { name: "Write", arguments: JSON.stringify({ file_path: "C:\\Temp\\index.html", content: "hello" }) },
+    });
+  });
+
+  it("turns multiple Write JSON wrapper outputs into Write tool calls", () => {
+    const calls = detectToolCalls('Write({"file_path":"index.html","content":"html"})\nWrite({"file_path":"styles.css","content":"body { color: red; }"})');
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ type: "function", function: { name: "Write", arguments: JSON.stringify({ file_path: "index.html", content: "html" }) } });
+    expect(calls[1]).toMatchObject({ type: "function", function: { name: "Write", arguments: JSON.stringify({ file_path: "styles.css", content: "body { color: red; }" }) } });
+  });
+
   it("returns null for normal prose", () => {
     expect(detectToolCall("hello world")).toBeNull();
   });

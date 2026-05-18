@@ -1,3 +1,8 @@
+# v0.4.48 (2026-05-19)
+
+## Fixes
+- Fix DeepSeek Web JSON-wrapper `Write({"file_path":"...","content":"..."})` output so Claude Code executes single and multi-file writes instead of printing calls as text.
+
 # v0.4.47 (2026-05-19)
 
 ## Fixes

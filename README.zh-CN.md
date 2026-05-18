@@ -9,13 +9,13 @@
   **将所有 AI 编程工具（Claude Code、Cursor、Antigravity、Copilot、Codex、Gemini、OpenCode、Cline、OpenClaw...）连接到 40+ AI 提供商和 100+ 模型。**
   
   [![npm](https://img.shields.io/npm/v/9router.svg)](https://www.npmjs.com/package/9router)
-  [![Version](https://img.shields.io/badge/version-v0.4.47-4D6BFE)](CHANGELOG.md)
+  [![Version](https://img.shields.io/badge/version-v0.4.48-4D6BFE)](CHANGELOG.md)
   [![Downloads](https://img.shields.io/npm/dm/9router.svg)](https://www.npmjs.com/package/9router)
   [![License](https://img.shields.io/npm/l/9router.svg)](https://github.com/decolua/9router/blob/main/LICENSE)
 
   <a href="https://trendshift.io/repositories/22628" target="_blank"><img src="https://trendshift.io/api/badge/repositories/22628" alt="decolua%2F9router | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
   
-  **当前版本：** `v0.4.47` • [更新日志](CHANGELOG.md)
+  **当前版本：** `v0.4.48` • [更新日志](CHANGELOG.md)
 
   [🚀 快速开始](#-快速开始) • [💡 功能特点](#-主要功能) • [📖 设置指南](#-设置指南) • [🌐 网站](https://9router.com)
 
