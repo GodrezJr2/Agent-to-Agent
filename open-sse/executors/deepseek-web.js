@@ -233,11 +233,33 @@ export function parseDeepSeekSse(text) {
   };
 }
 
+function coerceToolValue(value) {
+  const rawValue = String(value ?? "").trim();
+  if (rawValue.startsWith('"') && rawValue.endsWith('"')) {
+    return rawValue.slice(1, -1).replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/\\(["\\/bfnrt])/g, (_, ch) => ({ b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" }[ch] ?? ch));
+  }
+  if (rawValue === "true" || rawValue === "false") return rawValue === "true";
+  if (rawValue === "null") return null;
+  if (/^-?\d+(?:\.\d+)?$/.test(rawValue)) return Number(rawValue);
+  return rawValue;
+}
+
+function parseParameterToolArgs(text) {
+  const args = {};
+  const matches = [...String(text || "").matchAll(/<parameter\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/parameter>/g)];
+  if (matches.length === 0) return null;
+  for (const match of matches) args[match[1]] = coerceToolValue(match[2]);
+  return args;
+}
+
 function parseLooseToolArgs(text) {
   try {
     return JSON.parse(text);
   } catch {
   }
+
+  const parameterArgs = parseParameterToolArgs(text);
+  if (parameterArgs) return parameterArgs;
 
   const inner = String(text || "").trim().replace(/^\{\s*|\s*\}$/g, "");
   const keyRe = /(^|,)\s*"([^"]+)"\s*:/g;
@@ -250,19 +272,7 @@ function parseLooseToolArgs(text) {
     const key = match[2];
     const valueStart = match.index + match[0].length;
     const valueEnd = matches[i + 1]?.index ?? inner.length;
-    const rawValue = inner.slice(valueStart, valueEnd).trim();
-
-    if (rawValue.startsWith('"') && rawValue.endsWith('"')) {
-      args[key] = rawValue.slice(1, -1).replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/\\(["\\/bfnrt])/g, (_, ch) => ({ b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" }[ch] ?? ch));
-    } else if (rawValue === "true" || rawValue === "false") {
-      args[key] = rawValue === "true";
-    } else if (rawValue === "null") {
-      args[key] = null;
-    } else if (/^-?\d+(?:\.\d+)?$/.test(rawValue)) {
-      args[key] = Number(rawValue);
-    } else {
-      args[key] = rawValue;
-    }
+    args[key] = coerceToolValue(inner.slice(valueStart, valueEnd));
   }
   return args;
 }

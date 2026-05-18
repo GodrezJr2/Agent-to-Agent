@@ -277,6 +277,21 @@ describe("detectToolCall", () => {
     });
   });
 
+  it("turns parameter-style Claude tool calls into OpenAI tool calls", () => {
+    const call = detectToolCall('<tool_call name="Read">\n<parameter name="file_path">C:\\Users\\Administrator\\AppData\\Roaming\\npm\\claude-dsw.cmd</parameter>\n<parameter name="limit">2</parameter>\n</tool_call>');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Read",
+        arguments: JSON.stringify({
+          file_path: "C:\\Users\\Administrator\\AppData\\Roaming\\npm\\claude-dsw.cmd",
+          limit: 2,
+        }),
+      },
+    });
+  });
+
   it("returns null for normal prose", () => {
     expect(detectToolCall("hello world")).toBeNull();
   });
