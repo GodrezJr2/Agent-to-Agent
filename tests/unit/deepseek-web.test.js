@@ -362,6 +362,44 @@ describe("detectToolCall", () => {
     });
   });
 
+  it("turns DeepSeek file-write blocks into Write tool calls", () => {
+    const call = detectToolCall('<file-write>\n<path>C:\\Temp\\index.html</path>\n<content><!DOCTYPE html>\n<html>hello</html></content>\n</file-write>');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Write",
+        arguments: JSON.stringify({
+          file_path: "C:\\Temp\\index.html",
+          content: "<!DOCTYPE html>\n<html>hello</html>",
+        }),
+      },
+    });
+  });
+
+  it("turns multiple DeepSeek file-write blocks into Write tool calls", () => {
+    const calls = detectToolCalls('<file-write>\n<path>index.html</path>\n<content><html></html></content>\n</file-write>\n<file-write>\n<path>styles.css</path>\n<content>body { color: red; }</content>\n</file-write>');
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({
+      type: "function",
+      function: { name: "Write", arguments: JSON.stringify({ file_path: "index.html", content: "<html></html>" }) },
+    });
+    expect(calls[1]).toMatchObject({
+      type: "function",
+      function: { name: "Write", arguments: JSON.stringify({ file_path: "styles.css", content: "body { color: red; }" }) },
+    });
+  });
+
+  it("turns file-write blocks with file-content close tags into Write tool calls", () => {
+    const call = detectToolCall('<file-write>\n<path>index.html</path>\n<content><html></html></file-content>\n</file-write>');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: { name: "Write", arguments: JSON.stringify({ file_path: "index.html", content: "<html></html>" }) },
+    });
+  });
+
   it("returns null for normal prose", () => {
     expect(detectToolCall("hello world")).toBeNull();
   });

@@ -7,14 +7,14 @@
   **A living, breathing AI workspace where agents collaborate, delegate tasks, write code, and think together — in real time.**
 
   [![GitHub stars](https://img.shields.io/github/stars/GodrezJr2/Agent-to-Agent?style=social)](https://github.com/GodrezJr2/Agent-to-Agent/stargazers)
-  [![Version](https://img.shields.io/badge/version-v0.4.45-4D6BFE)](CHANGELOG.md)
+  [![Version](https://img.shields.io/badge/version-v0.4.46-4D6BFE)](CHANGELOG.md)
   [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
   [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
   [![A2A Protocol](https://img.shields.io/badge/A2A-Protocol-6f42c1)](https://google.github.io/A2A/)
   [![Powered by 9Router](https://img.shields.io/badge/Powered%20by-9Router-orange)](https://github.com/decolua/9router)
   [![Inspired by Pixel Agents](https://img.shields.io/badge/Inspired%20by-Pixel%20Agents-brightgreen)](https://github.com/pablodelucca/pixel-agents)
 
-  **Current version:** `v0.4.45` • [Changelog](CHANGELOG.md)
+  **Current version:** `v0.4.46` • [Changelog](CHANGELOG.md)
 
   [✨ Features](#-features) • [🚀 Quick Start](#-quick-start) • [🤖 How Agents Talk](#-how-agents-talk-to-each-other) • [🛠️ Tools](#-agent-tools) • [📡 A2A Protocol](#-a2a-protocol) • [🧪 Tested Models](#-tested-models)
 

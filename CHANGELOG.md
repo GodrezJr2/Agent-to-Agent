@@ -1,3 +1,8 @@
+# v0.4.46 (2026-05-19)
+
+## Fixes
+- Fix DeepSeek Web `<file-write>` block parsing so Claude Code executes multi-file landing page outputs as Write tool calls.
+
 # v0.4.45 (2026-05-19)
 
 ## Fixes

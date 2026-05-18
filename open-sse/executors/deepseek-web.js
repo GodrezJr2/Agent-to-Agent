@@ -353,6 +353,15 @@ function unpackToolArgs(parsed) {
   return Object.keys(args).length > 0 ? args : null;
 }
 
+const FILE_WRITE_RE = /<file-write\s*>\s*<path>\s*([\s\S]*?)\s*<\/path>\s*<content>\s*([\s\S]*?)\s*<\/(?:content|file-content)>\s*<\/file-write>/gi;
+
+function parseFileWriteArgs(match) {
+  return {
+    file_path: coerceToolValue(match[1]),
+    content: match[2].trim(),
+  };
+}
+
 function buildToolCall(toolName, parsed) {
   if (typeof toolName !== "string" || typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) return null;
   return {
@@ -376,6 +385,9 @@ function unwrapToolText(text) {
 
 function parseToolCallText(text) {
   const unwrapped = unwrapToolText(text);
+  const fileWriteMatch = [...unwrapped.matchAll(FILE_WRITE_RE)][0];
+  if (fileWriteMatch) return buildToolCall("Write", parseFileWriteArgs(fileWriteMatch));
+
   let parsed;
   let toolName;
 
@@ -404,6 +416,13 @@ function parseToolCallText(text) {
 
 export function detectToolCalls(text) {
   const unwrapped = unwrapToolText(text);
+  const fileWriteMatches = [...unwrapped.matchAll(FILE_WRITE_RE)];
+  if (fileWriteMatches.length > 1) {
+    return fileWriteMatches
+      .map((match) => buildToolCall("Write", parseFileWriteArgs(match)))
+      .filter(Boolean);
+  }
+
   const xmlMatches = [...unwrapped.matchAll(/<tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool(?:[-_]call)?>/g)];
   if (xmlMatches.length > 1) {
     return xmlMatches
