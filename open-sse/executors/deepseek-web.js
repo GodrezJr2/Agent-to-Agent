@@ -21,8 +21,43 @@ const MODEL_FLAGS = {
   "expert-deepthink-search": { modelType: "expert", thinkingEnabled: true, searchEnabled: true },
 };
 
+const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
+
 function stripProviderPrefix(model) {
   return String(model || "instant").replace(/^deepseek-web\//, "");
+}
+
+function getSessionCacheKey(model, credentials = {}) {
+  return `${credentials.connectionId || credentials.connectionName || "default"}:${stripProviderPrefix(model)}`;
+}
+
+function getMessageCount(body = {}) {
+  return Array.isArray(body.messages) ? body.messages.length : 0;
+}
+
+async function getChatSessionId({ model, body, credentials, headers, signal, sessionTtlMs, sessionCache }) {
+  const now = Date.now();
+  const key = getSessionCacheKey(model, credentials);
+  const messageCount = getMessageCount(body);
+  const cached = sessionCache.get(key);
+  const canReuse = cached
+    && now - cached.updatedAt < sessionTtlMs
+    && messageCount >= cached.messageCount;
+
+  if (canReuse) {
+    cached.messageCount = messageCount;
+    cached.updatedAt = now;
+    return cached.chatSessionId;
+  }
+
+  const response = await fetch(CHAT_SESSION_CREATE_URL, { method: "POST", headers, body: "{}", signal });
+  if (!response.ok) return { errorStatus: response.status };
+  const data = await parseJsonResponse(response, "DeepSeek session create");
+  const chatSessionId = data.chat_session?.id;
+  if (!chatSessionId) throw new Error("DeepSeek session response missing chat_session.id");
+
+  sessionCache.set(key, { chatSessionId, messageCount, updatedAt: now });
+  return chatSessionId;
 }
 
 export function mapDeepSeekModel(model, body = {}) {
@@ -487,6 +522,8 @@ export class DeepSeekWebExecutor extends BaseExecutor {
   constructor(options = {}) {
     super("deepseek-web", PROVIDERS["deepseek-web"]);
     this.solvePow = options.solvePow || defaultSolvePow;
+    this.sessionTtlMs = options.sessionTtlMs || DEFAULT_SESSION_TTL_MS;
+    this.sessionCache = new Map();
   }
 
   async execute({ model, body, stream, credentials, signal, log }) {
@@ -511,11 +548,16 @@ export class DeepSeekWebExecutor extends BaseExecutor {
     const baseHeaders = buildDeepSeekHeaders(credentials, { referer: `${DEEPSEEK_ORIGIN}/` });
 
     try {
-      const sessionResponse = await fetch(CHAT_SESSION_CREATE_URL, { method: "POST", headers: baseHeaders, body: "{}", signal });
-      if (!sessionResponse.ok) return this.errorResponse(sessionResponse.status, "DeepSeek session create failed", baseHeaders, body);
-      const sessionData = await parseJsonResponse(sessionResponse, "DeepSeek session create");
-      const chatSessionId = sessionData.chat_session?.id;
-      if (!chatSessionId) throw new Error("DeepSeek session response missing chat_session.id");
+      const chatSessionId = await getChatSessionId({
+        model,
+        body,
+        credentials,
+        headers: baseHeaders,
+        signal,
+        sessionTtlMs: this.sessionTtlMs,
+        sessionCache: this.sessionCache,
+      });
+      if (chatSessionId?.errorStatus) return this.errorResponse(chatSessionId.errorStatus, "DeepSeek session create failed", baseHeaders, body);
 
       const powResponse = await fetch(CREATE_POW_CHALLENGE_URL, { method: "POST", headers: baseHeaders, body: JSON.stringify({ target_path: CHAT_COMPLETION_PATH }), signal });
       if (!powResponse.ok) return this.errorResponse(powResponse.status, "DeepSeek PoW challenge failed", baseHeaders, body);

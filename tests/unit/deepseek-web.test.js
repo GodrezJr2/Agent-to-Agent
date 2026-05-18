@@ -389,4 +389,76 @@ describe("DeepSeekWebExecutor.execute", () => {
     expect(decodedPow.answer).toBe(7);
     expect(decodedPow.target_path).toBe("/api/v0/chat/completion");
   });
+
+  it("reuses one DeepSeek chat session while message history grows", async () => {
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+
+    await exec.execute({
+      model: "deepseek-web/expert-deepthink-search",
+      body: { messages: [{ role: "user", content: "one" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "tok-1", connectionId: "conn-1" },
+    });
+    await exec.execute({
+      model: "deepseek-web/expert-deepthink-search",
+      body: {
+        messages: [
+          { role: "user", content: "one" },
+          { role: "assistant", content: "two" },
+          { role: "user", content: "three" },
+        ],
+        stream: false,
+      },
+      stream: false,
+      credentials: { apiKey: "tok-1", connectionId: "conn-1" },
+    });
+
+    expect(calls.filter((call) => call.url.endsWith("/api/v0/chat_session/create"))).toHaveLength(1);
+    expect(calls.filter((call) => call.url.endsWith("/api/v0/chat/completion")).map((call) => call.body.chat_session_id)).toEqual(["session-1", "session-1"]);
+  });
+
+  it("starts a new DeepSeek chat session when message history shrinks", async () => {
+    let sessionNo = 0;
+    global.fetch = vi.fn(async (url, opts) => {
+      calls.push({ url, opts, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        sessionNo += 1;
+        return new Response(JSON.stringify({
+          code: 0,
+          data: { biz_code: 0, biz_data: { chat_session: { id: `session-${sessionNo}` } } },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "challenge-1", salt: "salt-1", signature: "sig-1", difficulty: 3, expire_at: 123456, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/completion")) {
+        return sseResponse('data: {"v":{"response":{"fragments":[{"type":"RESPONSE","content":"hi"}]}}}\n\n');
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    await exec.execute({
+      model: "deepseek-web/expert-deepthink-search",
+      body: {
+        messages: [
+          { role: "user", content: "one" },
+          { role: "assistant", content: "two" },
+          { role: "user", content: "three" },
+        ],
+        stream: false,
+      },
+      stream: false,
+      credentials: { apiKey: "tok-1", connectionId: "conn-1" },
+    });
+    await exec.execute({
+      model: "deepseek-web/expert-deepthink-search",
+      body: { messages: [{ role: "user", content: "new" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "tok-1", connectionId: "conn-1" },
+    });
+
+    expect(calls.filter((call) => call.url.endsWith("/api/v0/chat_session/create"))).toHaveLength(2);
+    expect(calls.filter((call) => call.url.endsWith("/api/v0/chat/completion")).map((call) => call.body.chat_session_id)).toEqual(["session-1", "session-2"]);
+  });
 });
