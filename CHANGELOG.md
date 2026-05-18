@@ -1,3 +1,8 @@
+# v0.4.43 (2026-05-19)
+
+## Fixes
+- Fix DeepSeek Web hyphenated `<tool-call>` parsing so Claude Code executes Write/Bash-style tool requests instead of printing them as text.
+
 # v0.4.42 (2026-05-18)
 
 ## Fixes

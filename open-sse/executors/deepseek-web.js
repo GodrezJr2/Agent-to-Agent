@@ -392,8 +392,8 @@ function parseToolCallText(text) {
     toolName = parsedJson?.tool;
     parsed = unpackToolArgs(parsedJson);
   } else {
-    const match = unwrapped.match(/<tool_call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool_call>/)
-      || unwrapped.match(/^<?tool_call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool_call>)?$/);
+    const match = unwrapped.match(/<tool[-_]call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool[-_]call>/)
+      || unwrapped.match(/^<?tool[-_]call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool[-_]call>)?$/);
     if (!match) return null;
     toolName = match[1];
     parsed = parseLooseToolArgs(match[2]);
@@ -404,7 +404,7 @@ function parseToolCallText(text) {
 
 export function detectToolCalls(text) {
   const unwrapped = unwrapToolText(text);
-  const xmlMatches = [...unwrapped.matchAll(/<tool_call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool_call>/g)];
+  const xmlMatches = [...unwrapped.matchAll(/<tool[-_]call\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool[-_]call>/g)];
   if (xmlMatches.length > 1) {
     return xmlMatches
       .map((match) => buildToolCall(match[1], parseLooseToolArgs(match[2])))
@@ -545,7 +545,7 @@ function looksLikeMalformedToolIntent(content, body = {}) {
   if (!Array.isArray(body.tools) || body.tools.length === 0) return false;
   const text = String(content || "");
   if (detectToolCalls(text).length > 0) return false;
-  return /<\/?tool_call|\btool\s*[:=]|"tool"\s*:|\bargs\s*[:=]|\barguments\s*[:=]/i.test(text);
+  return /<\/?tool[-_]call|\btool\s*[:=]|"tool"\s*:|\bargs\s*[:=]|\barguments\s*[:=]/i.test(text);
 }
 
 function buildToolRepairPrompt(content, body = {}) {

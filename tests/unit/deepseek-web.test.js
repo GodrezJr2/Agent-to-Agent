@@ -239,6 +239,21 @@ describe("detectToolCall", () => {
     expect(call.id).toMatch(/^call_/);
   });
 
+  it("turns hyphenated Claude-style tool-call text into OpenAI tool call", () => {
+    const call = detectToolCall('Directory empty. Creating page.\n\n<tool-call name="Write">\n{"file_path":"F:\\\\Project\\\\Ai AGent\\\\index.html","content":"hello"}\n</tool-call>');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Write",
+        arguments: JSON.stringify({
+          file_path: "F:\\Project\\Ai AGent\\index.html",
+          content: "hello",
+        }),
+      },
+    });
+  });
+
   it("turns unclosed Claude-style tool_call text into OpenAI tool call", () => {
     const call = detectToolCall('tool_call name="Bash">\n{"command":"Get-ChildItem","description":"List files"}');
 
