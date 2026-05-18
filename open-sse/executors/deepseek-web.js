@@ -269,7 +269,7 @@ function parseLooseToolArgs(text) {
 
 export function detectToolCall(text) {
   const raw = String(text || "").trim();
-  const unwrapped = raw.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+  const unwrapped = raw.replace(/^\s*```(?:json)?\s*/i, "").replace(/^\s*json\s+/i, "").replace(/\s*```\s*$/i, "").trim();
   let parsed;
   let toolName;
 
