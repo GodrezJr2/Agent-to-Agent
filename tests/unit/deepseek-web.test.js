@@ -200,6 +200,17 @@ describe("parseDeepSeekSse", () => {
 
     expect(parseDeepSeekSse(sse).content).toBe("pong");
   });
+
+  it("appends last RESPONSE fragment content when DeepSeek omits the operation", () => {
+    const sse = [
+      "data: {\"p\":\"response/fragments\",\"o\":\"APPEND\",\"v\":[{\"type\":\"RESPONSE\",\"content\":\"p\"}]}",
+      "",
+      "data: {\"p\":\"response/fragments/-1/content\",\"v\":\"ong\"}",
+      "",
+    ].join("\n");
+
+    expect(parseDeepSeekSse(sse).content).toBe("pong");
+  });
 });
 
 describe("detectToolCall", () => {

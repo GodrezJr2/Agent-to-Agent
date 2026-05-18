@@ -220,7 +220,7 @@ function updateDeepSeekFragmentContent(state, rawIndex, value, op) {
   const index = rawIndex === -1 ? state.currentFragmentIndex : rawIndex;
   if (index == null || index < 0) return;
   const fragment = state.fragments[index] || { type: state.currentFragmentType, content: "" };
-  fragment.content = op === "APPEND" ? `${fragment.content || ""}${value || ""}` : (value || "");
+  fragment.content = op === "SET" ? (value || "") : `${fragment.content || ""}${value || ""}`;
   state.fragments[index] = fragment;
   state.currentFragmentIndex = index;
   state.currentFragmentType = fragment.type;
