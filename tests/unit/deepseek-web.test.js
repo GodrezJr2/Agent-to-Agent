@@ -332,6 +332,21 @@ describe("detectToolCall", () => {
     });
   });
 
+  it("turns Claude XML tool tags into OpenAI tool calls", () => {
+    const call = detectToolCall('<tool name="Skill">\n<parameter name="skill">superpowers:brainstorming</parameter>\n<parameter name="args">User wants a landing page.</parameter>\n</tool>');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Skill",
+        arguments: JSON.stringify({
+          skill: "superpowers:brainstorming",
+          args: "User wants a landing page.",
+        }),
+      },
+    });
+  });
+
   it("turns clipped flat JSON tool calls into OpenAI tool calls", () => {
     const call = detectToolCall('tool":"Read","file_path":"C:\\\\Users\\\\Administrator\\\\AppData\\\\Roaming\\\\npm\\\\claude-dsw.cmd","limit":2}}');
 

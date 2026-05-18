@@ -1,3 +1,8 @@
+# v0.4.44 (2026-05-19)
+
+## Fixes
+- Fix DeepSeek Web Claude XML `<tool name="...">` parsing so Claude Code executes Skill-style tool requests instead of printing them as text.
+
 # v0.4.43 (2026-05-19)
 
 ## Fixes
