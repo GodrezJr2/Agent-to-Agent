@@ -1,3 +1,8 @@
+# v0.4.50 (2026-05-19)
+
+## Fixes
+- Fix DeepSeek Web parallel tool call failures by instructing model to call one tool per response and dropping mixed-type multi-tool responses to first call only.
+
 # v0.4.49 (2026-05-19)
 
 ## Fixes

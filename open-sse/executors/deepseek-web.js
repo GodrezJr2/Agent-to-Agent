@@ -133,7 +133,8 @@ function formatTools(tools) {
     return `- ${name}(${formatToolParameters(tool)}): ${description}`;
   });
   return [
-    "Tools are available. To call a tool, respond with exactly one JSON object and no markdown:",
+    "Tools are available. Call EXACTLY ONE tool per response — never two tools at once.",
+    "To call a tool, respond with exactly one JSON object and no markdown:",
     '{"tool":"tool_name","args":{}}',
     "Available tools:",
     ...lines,
@@ -523,9 +524,11 @@ export function detectToolCalls(text) {
 
   const xmlMatches = [...unwrapped.matchAll(/<tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool(?:[-_]call)?>/g)];
   if (xmlMatches.length > 1) {
-    return xmlMatches
+    const xmlCalls = xmlMatches
       .map((match) => buildToolCall(match[1], parseLooseToolArgs(match[2])))
       .filter(Boolean);
+    const allSameName = xmlCalls.every((c) => c.function.name === xmlCalls[0].function.name);
+    return allSameName ? xmlCalls : [xmlCalls[0]];
   }
 
   const writeJsonWrappers = findWriteJsonWrappers(unwrapped);
