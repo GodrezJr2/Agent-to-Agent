@@ -134,6 +134,7 @@ function formatTools(tools) {
   });
   return [
     "Tools are available. Call EXACTLY ONE tool per response — never two tools at once.",
+    "The Bash tool runs PowerShell on Windows. Use PowerShell syntax (Get-ChildItem, not ls; $env:VAR not $VAR).",
     "To call a tool, respond with exactly one JSON object and no markdown:",
     '{"tool":"tool_name","args":{}}',
     "Available tools:",

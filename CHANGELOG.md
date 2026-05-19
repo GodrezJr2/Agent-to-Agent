@@ -1,3 +1,8 @@
+# v0.4.51 (2026-05-19)
+
+## Fixes
+- Fix DeepSeek Web Bash tool using Linux syntax on Windows by hinting PowerShell syntax in tool instructions.
+
 # v0.4.50 (2026-05-19)
 
 ## Fixes
