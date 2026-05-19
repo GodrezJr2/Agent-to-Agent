@@ -151,6 +151,12 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated, onCron
   const [expandedFlow, setExpandedFlow] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
   const [tab, setTab] = useState<"edit" | "tasks" | "cron">("edit");
+  const [editingJob, setEditingJob] = useState<any | null>(null);
+  const [editSchedule, setEditSchedule] = useState("");
+  const [editMode, setEditMode] = useState<"single" | "pipeline">("single");
+  const [editPrompt, setEditPrompt] = useState("");
+  const [editSteps, setEditSteps] = useState<Array<{agentId: string; prompt: string}>>([]);
+  const [editSaving, setEditSaving] = useState(false);
   // Other agents this agent can report to (exclude self)
   const potentialManagers = allAgents.filter((a) => a.id !== agent.id);
 
@@ -412,6 +418,26 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated, onCron
                   }
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
+                  {/* Edit */}
+                  <button
+                    onClick={() => {
+                      setEditingJob(job);
+                      setEditSchedule(job.schedule || "");
+                      if (job.pipeline) {
+                        setEditMode("pipeline");
+                        setEditSteps(job.pipeline.map((s: any) => ({ agentId: s.agentId, prompt: s.prompt })));
+                        setEditPrompt("");
+                      } else {
+                        setEditMode("single");
+                        setEditPrompt(job.prompt || "");
+                        setEditSteps([]);
+                      }
+                    }}
+                    className="px-2 py-0.5 text-xs rounded bg-gray-700 text-yellow-400 hover:bg-yellow-900"
+                    title="Edit"
+                  >
+                    edit
+                  </button>
                   {/* Toggle enable/disable */}
                   <button
                     onClick={async () => {
@@ -445,6 +471,65 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated, onCron
               </div>
             ))}
           </div>
+          {/* Inline edit form */}
+          {editingJob && (
+            <div className="mt-3 border border-yellow-700 rounded p-3 bg-gray-800/60 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-yellow-400 text-xs font-semibold">Edit scheduled job</span>
+                <button onClick={() => setEditingJob(null)} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
+              </div>
+              <input value={editSchedule} onChange={e => setEditSchedule(e.target.value)} placeholder="6h" className="w-full bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-yellow-500 outline-none font-mono" />
+              <div className="flex gap-1">
+                <button onClick={() => setEditMode("single")} className={`px-2 py-0.5 text-xs rounded ${editMode === "single" ? "bg-blue-600 text-white" : "bg-gray-700 text-gray-400"}`}>Single</button>
+                <button onClick={() => { setEditMode("pipeline"); if (editSteps.length === 0) setEditSteps([{agentId: agent.id, prompt: ""}]); }} className={`px-2 py-0.5 text-xs rounded ${editMode === "pipeline" ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-400"}`}>Pipeline</button>
+              </div>
+              {editMode === "single" ? (
+                <textarea value={editPrompt} onChange={e => setEditPrompt(e.target.value)} rows={3} placeholder="What should this agent do?" className="w-full bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-yellow-500 outline-none resize-none" />
+              ) : (
+                <div className="space-y-1.5">
+                  {editSteps.map((step, i) => (
+                    <div key={i} className="space-y-1 bg-gray-700/50 rounded p-1.5">
+                      <div className="flex gap-1 items-center">
+                        <select value={step.agentId} onChange={e => setEditSteps(prev => prev.map((s, idx) => idx === i ? {...s, agentId: e.target.value} : s))} className="flex-1 bg-gray-800 text-white text-xs px-2 py-1 rounded border border-gray-600 outline-none">
+                          {allAgents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                        </select>
+                        <span className="text-gray-500 text-xs">#{i+1}</span>
+                        {i > 0 && <button onClick={() => setEditSteps(prev => { const s=[...prev]; [s[i-1],s[i]]=[s[i],s[i-1]]; return s; })} className="text-gray-500 hover:text-white text-xs px-1">↑</button>}
+                        {i < editSteps.length-1 && <button onClick={() => setEditSteps(prev => { const s=[...prev]; [s[i],s[i+1]]=[s[i+1],s[i]]; return s; })} className="text-gray-500 hover:text-white text-xs px-1">↓</button>}
+                        <button onClick={() => setEditSteps(prev => prev.filter((_,idx) => idx !== i))} className="text-red-400 hover:text-red-300 text-xs px-1">✕</button>
+                      </div>
+                      <textarea value={step.prompt} onChange={e => setEditSteps(prev => prev.map((s, idx) => idx === i ? {...s, prompt: e.target.value} : s))} rows={2} placeholder={`Step ${i+1} prompt`} className="w-full bg-gray-800 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-purple-500 outline-none resize-none" />
+                    </div>
+                  ))}
+                  <button onClick={() => setEditSteps(prev => [...prev, {agentId: allAgents[0]?.id || "", prompt: ""}])} className="w-full px-2 py-1 text-xs text-purple-400 border border-dashed border-purple-800 rounded hover:border-purple-500">+ Add step</button>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <button
+                  disabled={editSaving || !editSchedule.trim() || (editMode === "single" ? !editPrompt.trim() : editSteps.length < 2 || editSteps.some(s => !s.prompt.trim()))}
+                  onClick={async () => {
+                    setEditSaving(true);
+                    try {
+                      const body = editMode === "pipeline"
+                        ? { schedule: editSchedule.trim(), pipeline: editSteps, agentId: editingJob.agentId }
+                        : { schedule: editSchedule.trim(), prompt: editPrompt.trim(), pipeline: null };
+                      const res = await fetch(`/api/cron/${editingJob.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+                      if (res.ok) {
+                        const data = await res.json();
+                        setCronJobs(prev => prev.map(j => j.id === editingJob.id ? data.job : j));
+                        setEditingJob(null);
+                        onCronChanged();
+                      }
+                    } finally { setEditSaving(false); }
+                  }}
+                  className="flex-1 px-3 py-1.5 text-white text-xs rounded bg-yellow-600 hover:bg-yellow-500 disabled:opacity-40"
+                >
+                  {editSaving ? "Saving..." : "Save changes"}
+                </button>
+                <button onClick={() => setEditingJob(null)} className="px-3 py-1.5 text-xs rounded bg-gray-700 text-gray-400 hover:bg-gray-600">Cancel</button>
+              </div>
+            </div>
+          )}
           <button onClick={onClose} className="w-full px-4 py-2 bg-gray-800 text-gray-300 text-sm rounded hover:bg-gray-700">Close</button>
         </div>
         )}
