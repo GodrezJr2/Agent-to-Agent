@@ -1,6 +1,6 @@
 {
   "name": "9router-app",
-  "version": "0.4.52",
+  "version": "0.4.55",
   "description": "9Router web dashboard",
   "private": true,
   "scripts": {
@@ -8,8 +8,8 @@
     "build": "NODE_ENV=production next build --webpack",
     "start": "NODE_ENV=production next start",
     "dev:bun": "bun --bun next dev --webpack --port 20128",
-    "build:bun": "NODE_ENV=production bun --bun next build --webpack",
-    "start:bun": "NODE_ENV=production bun ./.next/standalone/server.js"
+    "build:bun": "bun --bun next build --webpack",
+    "start:bun": "bun ./.next/standalone/server.js"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -49,7 +49,6 @@
   "comment_better_sqlite3": "kept in optionalDependencies so npm install doesn't fail on systems without build tools — sql.js is used as fallback at runtime",
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.18",
-    "@types/react": "19.2.14",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "postcss": "^8.5.6",

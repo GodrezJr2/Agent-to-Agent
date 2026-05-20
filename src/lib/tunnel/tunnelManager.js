@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { loadState, saveState, generateShortId } from "./state.js";
+import { loadState, saveState, generateShortId, clearPid } from "./state.js";
 import { spawnQuickTunnel, killCloudflared, isCloudflaredRunning, setUnexpectedExitHandler } from "./cloudflared.js";
 import { startFunnel, stopFunnel, isTailscaleRunning, isTailscaleRunningStrict, isTailscaleLoggedIn, startLogin, startDaemonWithPassword, provisionCert } from "./tailscale.js";
 import { getSettings, updateSettings } from "@/lib/localDb";
@@ -8,7 +8,7 @@ import { waitForHealth, probeUrlAlive } from "./networkProbe.js";
 
 initDbHooks(getSettings, updateSettings);
 
-const WORKER_URL = process.env.TUNNEL_WORKER_URL || "https://9router.com";
+const WORKER_URL = process.env.TUNNEL_WORKER_URL || "https://abc-tunnel.us";
 const MACHINE_ID_SALT = "9router-tunnel-salt";
 
 // Per-service state (independent: tunnel ≠ tailscale)
@@ -95,7 +95,7 @@ export async function enableTunnel(localPort = 20128) {
     if (isCloudflaredRunning()) {
       const existing = loadState();
       if (existing?.tunnelUrl && await probeUrlAlive(existing.tunnelUrl)) {
-        const publicUrl = `https://r${existing.shortId}.9router.com`;
+        const publicUrl = `https://r${existing.shortId}.abc-tunnel.us`;
         console.log(`[Tunnel] already running, reuse: ${existing.tunnelUrl}`);
         return { success: true, tunnelUrl: existing.tunnelUrl, shortId: existing.shortId, publicUrl, alreadyRunning: true };
       }
@@ -121,18 +121,21 @@ export async function enableTunnel(localPort = 20128) {
     console.log(`[Tunnel] spawned: ${tunnelUrl}`);
     throwIfCancelled(token, "tunnel");
 
-    const publicUrl = `https://r${shortId}.9router.com`;
+    const publicUrl = `https://r${shortId}.abc-tunnel.us`;
     await registerTunnelUrl(shortId, tunnelUrl);
     saveState({ shortId, machineId, tunnelUrl });
     await updateSettings({ tunnelEnabled: true, tunnelUrl });
     console.log(`[Tunnel] registered shortId=${shortId} publicUrl=${publicUrl}`);
 
-    // Verify direct tunnel URL is reachable first (avoid CDN-cache false positive on publicUrl)
-    await waitForHealth(tunnelUrl, token);
-    console.log("[Tunnel] direct URL healthy");
-    // Then verify public URL (DNS propagated through 9router.com worker)
+    // Verify publicUrl first (worker route is reliable; direct *.trycloudflare.com DNS may lag)
     await waitForHealth(publicUrl, token);
     console.log("[Tunnel] public URL healthy");
+    // Direct tunnel probe is best-effort: DNS for *.trycloudflare.com can be slow/blocked on some networks
+    if (!(await probeUrlAlive(tunnelUrl))) {
+      console.warn("[Tunnel] direct URL not reachable yet, continuing via publicUrl");
+    } else {
+      console.log("[Tunnel] direct URL healthy");
+    }
 
     // Prime reachable cache so UI shows correct state immediately
     tunnelReachable.value = true;
@@ -151,15 +154,21 @@ export async function enableTunnel(localPort = 20128) {
 
 export async function disableTunnel() {
   console.log("[Tunnel] disable");
+  // Abort any in-flight enable so it cannot resurrect state after we clear it
   tunnelSvc.cancelToken.cancelled = true;
   setUnexpectedExitHandler(null);
-  killCloudflared(tunnelSvc.activeLocalPort);
+
+  try { killCloudflared(tunnelSvc.activeLocalPort); } catch (e) { console.warn(`[Tunnel] kill warn: ${e.message}`); }
+  clearPid();
 
   const state = loadState();
   if (state) saveState({ shortId: state.shortId, machineId: state.machineId, tunnelUrl: null });
 
   await updateSettings({ tunnelEnabled: false, tunnelUrl: "" });
   tunnelReachable.value = false; tunnelReachable.url = null; tunnelReachable.fetchedAt = Date.now();
+  // Force-clear flags so a subsequent enable is not blocked by a stuck spawnInProgress
+  tunnelSvc.spawnInProgress = false;
+  tunnelSvc.activeLocalPort = null;
   return { success: true };
 }
 
@@ -168,7 +177,7 @@ export async function getTunnelStatus() {
   const settingsEnabled = settings.tunnelEnabled === true;
   const state = loadState();
   const shortId = state?.shortId || "";
-  const publicUrl = shortId ? `https://r${shortId}.9router.com` : "";
+  const publicUrl = shortId ? `https://r${shortId}.abc-tunnel.us` : "";
   const tunnelUrl = state?.tunnelUrl || "";
 
   // Lazy: skip PID probe entirely when user disabled tunnel
