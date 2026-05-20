@@ -120,7 +120,7 @@ export async function DELETE(request) {
  * GET /api/pricing/defaults
  * Get default pricing configuration
  */
-export async function GET_DEFAULTS() {
+async function GET_DEFAULTS() {
   try {
     const defaultPricing = getDefaultPricing();
     return NextResponse.json(defaultPricing);
