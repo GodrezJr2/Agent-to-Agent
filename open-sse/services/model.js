@@ -18,6 +18,8 @@ const ALIAS_TO_PROVIDER_ID = {
   el: "elevenlabs",
   // API Key providers
   openai: "openai",
+  vercel: "vercel-ai-gateway",
+  "vercel-ai-gateway": "vercel-ai-gateway",
   anthropic: "anthropic",
   gemini: "gemini",
   openrouter: "openrouter",
@@ -65,10 +67,10 @@ const ALIAS_TO_PROVIDER_ID = {
   "grok-web": "grok-web",
   pw: "perplexity-web",
   "perplexity-web": "perplexity-web",
-  dsw: "deepseek-web",
-  "deepseek-web": "deepseek-web",
   mimo: "xiaomi-mimo",
   "xiaomi-mimo": "xiaomi-mimo",
+  xmtp: "xiaomi-tokenplan",
+  "xiaomi-tokenplan": "xiaomi-tokenplan",
   cf: "cloudflare-ai",
   "cloudflare-ai": "cloudflare-ai",
   // Image/video providers
@@ -132,6 +134,8 @@ const ALIAS_TO_PROVIDER_ID = {
   "nous-research": "nous-research",
   nous: "nous-research",
   glhf: "glhf",
+  bb: "blackbox",
+  blackbox: "blackbox",
 };
 
 /**
