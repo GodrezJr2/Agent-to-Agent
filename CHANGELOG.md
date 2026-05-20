@@ -1,3 +1,14 @@
+# v0.4.55 (2026-05-21)
+
+## Fork-specific fixes
+- Build: remove invalid `GET_DEFAULTS` export from pricing route (Next.js 16 strict route type check)
+- Build: add `typescript.ignoreBuildErrors` to next.config.mjs to handle JS route type mismatches from upstream
+- Office: add inline edit button for scheduled cron jobs / pipelines (schedule, prompt, pipeline steps)
+- DeepSeek Web: full tool-call parser with parallel call fix, PowerShell hint, history truncation, Skill blocking
+- Merge: upstream v0.4.55 — Kiro live models, openai-to-kiro translator, blackbox provider, security hardening
+
+---
+
 # v0.4.55 (2026-05-18)
 
 ## Features
