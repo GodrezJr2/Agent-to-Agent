@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
+import { KIRO_AGENTIC_SYSTEM_PROMPT } from "../config/kiroConstants.js";
 
 const DEEPSEEK_ORIGIN = "https://chat.deepseek.com";
 const CHAT_SESSION_CREATE_URL = `${DEEPSEEK_ORIGIN}/api/v0/chat_session/create`;
@@ -22,9 +23,18 @@ const MODEL_FLAGS = {
 };
 
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
+const DEEPSEEK_AGENTIC_SUFFIX = "-agentic";
 
 function stripProviderPrefix(model) {
   return String(model || "instant").replace(/^deepseek-web\//, "");
+}
+
+function isAgenticModel(key) {
+  return key.endsWith(DEEPSEEK_AGENTIC_SUFFIX);
+}
+
+function stripAgenticSuffix(key) {
+  return isAgenticModel(key) ? key.slice(0, -DEEPSEEK_AGENTIC_SUFFIX.length) : key;
 }
 
 function getSessionCacheKey(model, credentials = {}) {
@@ -61,7 +71,9 @@ async function getChatSessionId({ model, body, credentials, headers, signal, ses
 }
 
 export function mapDeepSeekModel(model, body = {}) {
-  const key = stripProviderPrefix(model);
+  const raw = stripProviderPrefix(model);
+  const agentic = isAgenticModel(raw);
+  const key = agentic ? stripAgenticSuffix(raw) : raw;
   const mapped = MODEL_FLAGS[key] || MODEL_FLAGS.instant;
   const thinkingRequested = body?.thinking === true || body?.thinking?.type === "enabled" || (body?.reasoning_effort != null && body.reasoning_effort !== "none");
   const modelExplicitlyDisablesThinking = key === "instant" || key === "instant-search" || key === "expert" || key === "expert-search";
@@ -70,6 +82,7 @@ export function mapDeepSeekModel(model, body = {}) {
     modelType: mapped.modelType,
     thinkingEnabled: mapped.thinkingEnabled || (thinkingRequested && !modelExplicitlyDisablesThinking) || thinkingRequested,
     searchEnabled: mapped.searchEnabled,
+    agentic,
   };
 }
 
@@ -745,7 +758,13 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       return { response: errResp, url: CHAT_COMPLETION_URL, headers: {}, transformedBody: body };
     }
 
-    const prompt = buildDeepSeekPrompt(body);
+    const flags = mapDeepSeekModel(model, body);
+    let promptBody = body;
+    if (flags.agentic) {
+      const msgs = Array.isArray(body.messages) ? body.messages : [];
+      promptBody = { ...body, messages: [{ role: "system", content: KIRO_AGENTIC_SYSTEM_PROMPT }, ...msgs] };
+    }
+    const prompt = buildDeepSeekPrompt(promptBody);
     if (!prompt.trim()) {
       const errResp = new Response(JSON.stringify({ error: { message: "Empty prompt after processing", type: "invalid_request" } }), { status: 400, headers: { "Content-Type": "application/json" } });
       return { response: errResp, url: CHAT_COMPLETION_URL, headers: {}, transformedBody: body };
@@ -772,7 +791,6 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       const answer = await this.solvePow(challenge);
       const powHeader = buildPowHeaderValue({ ...challenge, answer, target_path: CHAT_COMPLETION_PATH });
       const headers = buildDeepSeekHeaders(credentials, { powHeader, referer: `${DEEPSEEK_ORIGIN}/a/chat/s/${chatSessionId}` });
-      const flags = mapDeepSeekModel(model, body);
       const finalBody = {
         chat_session_id: chatSessionId,
         parent_message_id: null,

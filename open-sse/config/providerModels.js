@@ -625,6 +625,11 @@ export const PROVIDER_MODELS = {
     { id: "expert-search", name: "DeepSeek Expert + Search" },
     { id: "expert-deepthink", name: "DeepSeek Expert + DeepThink" },
     { id: "expert-deepthink-search", name: "DeepSeek Expert + DeepThink + Search" },
+    // Agentic variants — injects chunked-write protocol for reliable tool/file ops
+    { id: "instant-agentic", name: "DeepSeek Instant (Agentic)" },
+    { id: "instant-deepthink-agentic", name: "DeepSeek Instant + DeepThink (Agentic)" },
+    { id: "expert-agentic", name: "DeepSeek Expert (Agentic)" },
+    { id: "expert-deepthink-agentic", name: "DeepSeek Expert + DeepThink (Agentic)" },
   ],
 
   // TTS entries are loaded from ttsModels.js via buildTtsProviderModels()
