@@ -5,10 +5,38 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 // Default token expiry buffer (refresh if expires within 5 minutes)
 export const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 
-// In-flight refresh dedup: prevents race condition that triggers refresh_token_reused → Auth0 family revoke
-const refreshPromiseCache = new Map();
-function getRefreshCacheKey(provider, refreshToken) {
-  return `${provider}:${refreshToken}`;
+// Dedup in-flight promise + recent result to prevent rotating refresh token reuse.
+const REFRESH_RESULT_TTL_MS = 10_000;
+const refreshDedupCache = new Map();
+
+async function dedupRefresh(provider, oldToken, fn, log) {
+  if (!oldToken) return fn();
+  const key = `${provider}:${oldToken}`;
+  const hit = refreshDedupCache.get(key);
+  if (hit) {
+    if (hit.promise) {
+      log?.info?.("TOKEN_REFRESH", `Reusing in-flight refresh for ${provider}`);
+      return hit.promise;
+    }
+    if (hit.expiresAt > Date.now()) {
+      log?.info?.("TOKEN_REFRESH", `Reusing recent refresh result for ${provider}`);
+      return hit.result;
+    }
+    refreshDedupCache.delete(key);
+  }
+
+  const promise = (async () => {
+    try {
+      const result = await fn();
+      refreshDedupCache.set(key, { result, expiresAt: Date.now() + REFRESH_RESULT_TTL_MS });
+      return result;
+    } catch (error) {
+      refreshDedupCache.delete(key);
+      throw error;
+    }
+  })();
+  refreshDedupCache.set(key, { promise });
+  return promise;
 }
 
 // Check if refresh result indicates unrecoverable error (caller should stop retry, force re-auth)
@@ -44,49 +72,51 @@ export async function refreshAccessToken(provider, refreshToken, credentials, lo
     return null;
   }
 
-  try {
-    const response = await fetch(config.refreshUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-      },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-        client_id: config.clientId,
-        client_secret: config.clientSecret,
-      }),
-    });
+  return dedupRefresh(provider, refreshToken, async () => {
+    try {
+      const response = await fetch(config.refreshUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+        }),
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      log?.error?.("TOKEN_REFRESH", `Failed to refresh token for ${provider}`, {
-        status: response.status,
-        error: errorText,
+      if (!response.ok) {
+        const errorText = await response.text();
+        log?.error?.("TOKEN_REFRESH", `Failed to refresh token for ${provider}`, {
+          status: response.status,
+          error: errorText,
+        });
+        return null;
+      }
+
+      const tokens = await response.json();
+
+      log?.info?.("TOKEN_REFRESH", `Successfully refreshed token for ${provider}`, {
+        hasNewAccessToken: !!tokens.access_token,
+        hasNewRefreshToken: !!tokens.refresh_token,
+        expiresIn: tokens.expires_in,
+      });
+
+      return {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token || refreshToken,
+        expiresIn: tokens.expires_in,
+      };
+    } catch (error) {
+      log?.error?.("TOKEN_REFRESH", `Error refreshing token for ${provider}`, {
+        error: error.message,
       });
       return null;
     }
-
-    const tokens = await response.json();
-
-    log?.info?.("TOKEN_REFRESH", `Successfully refreshed token for ${provider}`, {
-      hasNewAccessToken: !!tokens.access_token,
-      hasNewRefreshToken: !!tokens.refresh_token,
-      expiresIn: tokens.expires_in,
-    });
-
-    return {
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token || refreshToken,
-      expiresIn: tokens.expires_in,
-    };
-  } catch (error) {
-    log?.error?.("TOKEN_REFRESH", `Error refreshing token for ${provider}`, {
-      error: error.message,
-    });
-    return null;
-  }
+  }, log);
 }
 
 /**
@@ -217,6 +247,8 @@ export async function refreshQwenToken(refreshToken, log) {
  * so callers stop retrying and request re-authentication.
  */
 export async function refreshCodexToken(refreshToken, log) {
+  if (!refreshToken) return null;
+  return dedupRefresh("codex", refreshToken, async () => {
   try {
   const response = await fetch(OAUTH_ENDPOINTS.openai.token, {
     method: "POST",
@@ -279,6 +311,7 @@ export async function refreshCodexToken(refreshToken, log) {
     log?.error?.("TOKEN_REFRESH", `Network error refreshing Codex token: ${error.message}`);
     return null;
   }
+  }, log);
 }
 
 /**
@@ -517,20 +550,8 @@ export async function getAccessToken(provider, credentials, log) {
     log?.warn?.("TOKEN_REFRESH", `No valid refresh token available for provider: ${provider}`);
     return null;
   }
-
-  const cacheKey = getRefreshCacheKey(provider, credentials.refreshToken);
-
-  if (refreshPromiseCache.has(cacheKey)) {
-    log?.info?.("TOKEN_REFRESH", `Reusing in-flight refresh for ${provider}`);
-    return refreshPromiseCache.get(cacheKey);
-  }
-
-  const refreshPromise = _getAccessTokenInternal(provider, credentials, log).finally(() => {
-    refreshPromiseCache.delete(cacheKey);
-  });
-
-  refreshPromiseCache.set(cacheKey, refreshPromise);
-  return refreshPromise;
+  if (provider === "codex") return _getAccessTokenInternal(provider, credentials, log);
+  return dedupRefresh(provider, credentials.refreshToken, () => _getAccessTokenInternal(provider, credentials, log), log);
 }
 
 async function _getAccessTokenInternal(provider, credentials, log) {

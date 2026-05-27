@@ -35,6 +35,9 @@ export const MEMORY_CONFIG = {
 // 10min to accommodate OpenAI-style models (gpt-5.5, o-series) that think silently before emitting
 export const STREAM_STALL_TIMEOUT_MS = 10 * 60 * 1000;
 
+// Fetch connect timeout: abort if upstream doesn't return response headers within this duration
+export const FETCH_CONNECT_TIMEOUT_MS = 20 * 1000;
+
 // Default token limits
 export const DEFAULT_MAX_TOKENS = 64000;
 export const DEFAULT_MIN_TOKENS = 32000;

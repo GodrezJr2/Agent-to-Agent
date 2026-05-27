@@ -1,3 +1,20 @@
+# v0.4.63-fork.1 (2026-05-28)
+
+## Targeted upstream backports
+- OpenAI-compatible providers: fallback `response_format: json_schema` to `json_object` with schema instructions for backends that reject strict JSON schema.
+- Codex: normalize Responses API bodies, strip stored item references with `store=false`, stabilize prompt cache/session headers, and retry overloaded SSE responses.
+- Reliability: add upstream fetch connect timeout while preserving fork 10-minute stream stall timeout for silent-thinking models.
+- Streams: close gracefully on abort/socket-reset style disconnects instead of surfacing client-visible stream errors.
+- Auth: add login lockout and direct Codex refresh-token dedup/recent-result reuse to avoid rotating token reuse.
+- Embeddings: forward Gemini `dimensions` as `outputDimensionality`.
+
+## Fork guardrails
+- Preserved Office / Agent OS / A2A / cron / memory custom features.
+- Preserved DeepSeek Web provider/parser/wasm/tests.
+- Preserved local `STREAM_STALL_TIMEOUT_MS = 10 * 60 * 1000` instead of upstream 35s stall timeout.
+
+---
+
 # v0.4.55 (2026-05-21)
 
 ## Fork-specific fixes

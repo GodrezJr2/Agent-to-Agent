@@ -12,7 +12,31 @@ export class DefaultExecutor extends BaseExecutor {
   }
 
   transformRequest(model, body) {
-    return injectReasoningContent({ provider: this.provider, model, body });
+    const transformed = this.applyJsonSchemaFallback(body);
+    return injectReasoningContent({ provider: this.provider, model, body: transformed });
+  }
+
+  applyJsonSchemaFallback(body) {
+    if (!this.provider?.startsWith?.("openai-compatible-")) return body;
+    const rf = body?.response_format;
+    if (rf?.type !== "json_schema" || !rf.json_schema?.schema) return body;
+
+    const schemaJson = JSON.stringify(rf.json_schema.schema, null, 2);
+    const prompt = `You must respond with valid JSON that strictly follows this JSON schema:\n\`\`\`json\n${schemaJson}\n\`\`\`\nRespond ONLY with the JSON object, no other text.`;
+    const messages = Array.isArray(body.messages) ? body.messages.map((message) => ({ ...message })) : [];
+    const systemMessage = messages.find((message) => message.role === "system");
+
+    if (systemMessage) {
+      if (typeof systemMessage.content === "string") {
+        systemMessage.content = `${systemMessage.content}\n\n${prompt}`;
+      } else if (Array.isArray(systemMessage.content)) {
+        systemMessage.content = [...systemMessage.content, { type: "text", text: `\n\n${prompt}` }];
+      }
+    } else {
+      messages.unshift({ role: "system", content: prompt });
+    }
+
+    return { ...body, messages, response_format: { type: "json_object" } };
   }
 
   buildUrl(model, stream, urlIndex = 0, credentials = null) {

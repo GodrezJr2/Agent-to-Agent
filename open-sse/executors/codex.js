@@ -6,10 +6,90 @@ import { normalizeResponsesInput } from "../translator/helpers/responsesApiHelpe
 import { fetchImageAsBase64 } from "../translator/helpers/imageHelper.js";
 import { getModelUpstreamId } from "../config/providerModels.js";
 import { getConsistentMachineId } from "../../src/shared/utils/machineId.js";
+import { DEFAULT_RETRY_CONFIG, resolveRetryEntry } from "../config/runtimeConfig.js";
+
+const CODEX_SSE_OVERLOADED_PATTERNS = ["server_is_overloaded", "service_unavailable_error"];
+const CODEX_SSE_PEEK_BYTES = 4096;
 
 // In-memory map: hash(machineId + first assistant content) → { sessionId, lastUsed }
 const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
 const assistantSessionMap = new Map();
+
+const SERVER_ID_PATTERN = /^(rs|fc|resp|msg)_/;
+
+const CODEX_HOSTED_TOOL_TYPES = new Set([
+  "image_generation", "web_search", "web_search_preview", "file_search",
+  "computer", "computer_use_preview", "code_interpreter", "mcp", "local_shell"
+]);
+
+const RESPONSES_API_ALLOWLIST = new Set([
+  "model", "input", "instructions", "tools", "tool_choice", "stream", "store",
+  "reasoning", "service_tier", "include", "prompt_cache_key", "client_metadata"
+]);
+
+function convertSystemToDeveloperRole(body) {
+  if (!Array.isArray(body.input)) return;
+  for (const item of body.input) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const isSystemMsg = item.role === "system" && (!item.type || item.type === "message");
+    if (isSystemMsg) item.role = "developer";
+  }
+}
+
+function stripStoredItemReferences(body) {
+  if (!Array.isArray(body.input)) return;
+  body.input = body.input.filter((item) => {
+    if (typeof item === "string" && SERVER_ID_PATTERN.test(item)) return false;
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      if (item.type === "item_reference") return false;
+      if (typeof item.id === "string" && SERVER_ID_PATTERN.test(item.id)) delete item.id;
+    }
+    return true;
+  });
+}
+
+function normalizeCodexTools(body) {
+  if (!Array.isArray(body.tools)) return;
+  const validNames = new Set();
+  body.tools = body.tools.filter((tool) => {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) return false;
+    const type = typeof tool.type === "string" ? tool.type : "";
+    if (type === "namespace") {
+      if (Array.isArray(tool.tools)) {
+        for (const st of tool.tools) {
+          const name = typeof st?.name === "string" ? st.name.trim().slice(0, 128) : "";
+          if (name) validNames.add(name);
+        }
+      }
+      return true;
+    }
+    if (type !== "function") {
+      if (!type || tool.function || typeof tool.name === "string") return false;
+      return CODEX_HOSTED_TOOL_TYPES.has(type);
+    }
+    const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function) ? tool.function : null;
+    const rawName = typeof tool.name === "string" ? tool.name : (typeof fn?.name === "string" ? fn.name : "");
+    const name = rawName.trim();
+    if (!name) return false;
+    const description = typeof tool.description === "string" ? tool.description : (typeof fn?.description === "string" ? fn.description : "");
+    const parameters = tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters)
+      ? tool.parameters
+      : (fn?.parameters && typeof fn.parameters === "object" && !Array.isArray(fn.parameters) ? fn.parameters : { type: "object", properties: {} });
+    for (const key of Object.keys(tool)) delete tool[key];
+    tool.type = "function";
+    tool.name = name.slice(0, 128);
+    if (description) tool.description = description;
+    tool.parameters = parameters;
+    validNames.add(tool.name);
+    return true;
+  });
+  if (body.tool_choice && typeof body.tool_choice === "object" && !Array.isArray(body.tool_choice)) {
+    if (body.tool_choice.type === "function") {
+      const name = typeof body.tool_choice.name === "string" ? body.tool_choice.name.trim() : "";
+      if (!name || !validNames.has(name)) delete body.tool_choice;
+    }
+  }
+}
 
 // Cache machine ID at module level (resolved once)
 let cachedMachineId = null;
@@ -33,32 +113,48 @@ function extractItemText(item) {
   return "";
 }
 
-// Resolve session_id from first assistant message + machineId to avoid cross-user collision
-function resolveConversationSessionId(input, machineId) {
-  const machineSessionId = machineId ? `sess_${hashContent(machineId)}` : generateSessionId();
-  if (!Array.isArray(input) || input.length === 0) return machineSessionId;
+function normalizeSessionId(value) {
+  if (typeof value !== "string") return null;
+  const v = value.trim();
+  if (!v || v.length > 256) return null;
+  return v;
+}
 
-  // Find first assistant message that has actual text content
-  let text = "";
-  for (const item of input) {
-    if (item.role === "assistant") {
-      text = extractItemText(item);
-      if (text) break;
+function resolveCacheSessionId(body, credentials, machineId) {
+  const fromBody =
+    normalizeSessionId(body?.prompt_cache_key) ||
+    normalizeSessionId(body?.session_id) ||
+    normalizeSessionId(body?.conversation_id);
+  if (fromBody) return fromBody;
+
+  if (Array.isArray(body?.input) && body.input.length > 0) {
+    let text = "";
+    const minLen = 50;
+    const capLen = 200;
+    for (const item of body.input) {
+      if (item?.role !== "assistant") continue;
+      const itemText = extractItemText(item);
+      if (!itemText) continue;
+      text += itemText;
+      if (text.length >= capLen) break;
+    }
+    if (text.length >= minLen) {
+      const hash = hashContent((machineId || "") + text.slice(0, capLen));
+      const entry = assistantSessionMap.get(hash);
+      if (entry) {
+        entry.lastUsed = Date.now();
+        return entry.sessionId;
+      }
+      const sessionId = generateSessionId();
+      assistantSessionMap.set(hash, { sessionId, lastUsed: Date.now() });
+      return sessionId;
     }
   }
-  if (!text) return machineSessionId;
 
-  const hash = hashContent((machineId || "") + text);
-  const entry = assistantSessionMap.get(hash);
-  if (entry) {
-    entry.lastUsed = Date.now();
-    return entry.sessionId;
-  }
+  const workspaceId = normalizeSessionId(credentials?.providerSpecificData?.workspaceId);
+  if (workspaceId) return workspaceId;
 
-
-  const sessionId = generateSessionId();
-  assistantSessionMap.set(hash, { sessionId, lastUsed: Date.now() });
-  return sessionId;
+  return machineId ? `sess_${hashContent(machineId)}` : generateSessionId();
 }
 
 // Cleanup expired entries periodically
@@ -80,12 +176,17 @@ export class CodexExecutor extends BaseExecutor {
   }
 
   /**
-   * Override headers to add session_id per conversation
-   * transformRequest runs BEFORE buildHeaders, sets this._currentSessionId
+   * Override headers to add codex-specific identity headers.
+   * transformRequest runs BEFORE buildHeaders, sets this._currentSessionId.
    */
   buildHeaders(credentials, stream = true) {
     const headers = super.buildHeaders(credentials, stream);
     headers["session_id"] = this._currentSessionId || credentials?.connectionId || "default";
+    if (!headers["originator"]) headers["originator"] = "codex_cli_rs";
+    const workspaceId = credentials?.providerSpecificData?.workspaceId;
+    if (typeof workspaceId === "string" && workspaceId && !headers["chatgpt-account-id"]) {
+      headers["chatgpt-account-id"] = workspaceId;
+    }
     return headers;
   }
 
@@ -117,9 +218,80 @@ export class CodexExecutor extends BaseExecutor {
   }
 
   async execute(args) {
-    // Fetch remote images before the synchronous transform/execute pipeline
     await this.prefetchImages(args.body);
-    return super.execute(args);
+
+    const retryConfig = { ...DEFAULT_RETRY_CONFIG, ...this.config.retry };
+    const { attempts, delayMs } = resolveRetryEntry(retryConfig[503]);
+    let attempt = 0;
+    while (true) {
+      const result = await super.execute(args);
+      const peek = await this._peekSseOverloaded(result.response);
+      if (!peek.matched) {
+        if (peek.replacementBody) {
+          result.response = new Response(peek.replacementBody, {
+            status: result.response.status,
+            statusText: result.response.statusText,
+            headers: result.response.headers,
+          });
+        }
+        return result;
+      }
+      if (attempt >= attempts) {
+        args.log?.warn?.("RETRY", `CODEX | SSE overloaded "${peek.matched}" — retries exhausted (${attempt}/${attempts})`);
+        if (peek.replacementBody) {
+          result.response = new Response(peek.replacementBody, {
+            status: result.response.status,
+            statusText: result.response.statusText,
+            headers: result.response.headers,
+          });
+        }
+        return result;
+      }
+      attempt++;
+      args.log?.debug?.("RETRY", `CODEX | SSE "${peek.matched}" retry ${attempt}/${attempts} after ${delayMs / 1000}s`);
+      try { await result.response.body?.cancel?.(); } catch { }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  async _peekSseOverloaded(response) {
+    if (!response || !response.ok || !response.body) return { matched: null, replacementBody: null };
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const chunks = [];
+    let text = "";
+    let matched = null;
+    try {
+      while (text.length < CODEX_SSE_PEEK_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        text += decoder.decode(value, { stream: true });
+        const hit = CODEX_SSE_OVERLOADED_PATTERNS.find((pattern) => text.includes(pattern));
+        if (hit) { matched = hit; break; }
+      }
+    } catch { }
+    reader.releaseLock();
+
+    const upstream = response.body;
+    let upstreamReader = null;
+    const replacementBody = new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        upstreamReader = upstream.getReader();
+      },
+      async pull(controller) {
+        try {
+          const { done, value } = await upstreamReader.read();
+          if (done) { controller.close(); return; }
+          controller.enqueue(value);
+        } catch (error) { controller.error(error); }
+      },
+      cancel(reason) {
+        try { upstreamReader?.cancel(reason); } catch { }
+      },
+    });
+    return { matched, replacementBody };
   }
 
   // Parse Codex usage_limit_reached to extract precise resetsAtMs; fallback to default otherwise
@@ -154,8 +326,8 @@ export class CodexExecutor extends BaseExecutor {
   transformRequest(model, body, stream, credentials) {
     this._isCompact = !!body._compact;
     delete body._compact;
-    // Resolve conversation-stable session_id from input history + machineId
-    this._currentSessionId = resolveConversationSessionId(body.input, cachedMachineId);
+    // Resolve conversation-stable session_id (priority: body → assistant-text → workspace → machine)
+    this._currentSessionId = resolveCacheSessionId(body, credentials, cachedMachineId);
     // Convert string input to array format (Codex API requires input as array)
     const normalized = normalizeResponsesInput(body.input);
     if (normalized) body.input = normalized;
@@ -164,6 +336,13 @@ export class CodexExecutor extends BaseExecutor {
     if (!body.input || (Array.isArray(body.input) && body.input.length === 0)) {
       body.input = [{ type: "message", role: "user", content: [{ type: "input_text", text: "..." }] }];
     }
+
+    // Keep system prompts in body.input as role=developer so they stay in the cacheable prefix
+    convertSystemToDeveloperRole(body);
+    // Strip server-generated item IDs (rs_/fc_/resp_/msg_) — Codex /responses can't resolve when store=false
+    stripStoredItemReferences(body);
+    // Flatten function tools + drop unsupported types
+    normalizeCodexTools(body);
 
     // Ensure streaming is enabled (Codex API requires it)
     body.stream = true;
@@ -175,6 +354,11 @@ export class CodexExecutor extends BaseExecutor {
 
     // Ensure store is false (Codex requirement)
     body.store = false;
+
+    // Inject prompt_cache_key for stable Codex prompt caching
+    if (!body.prompt_cache_key && this._currentSessionId) {
+      body.prompt_cache_key = this._currentSessionId;
+    }
 
     // Map virtual Codex review models to the upstream Codex model before suffix parsing.
     body.model = getModelUpstreamId("cx", body.model || model);
@@ -223,6 +407,12 @@ export class CodexExecutor extends BaseExecutor {
     delete body.metadata; // Cursor sends this but Codex doesn't support it
     delete body.stream_options; // Cursor sends this but Codex doesn't support it
     delete body.safety_identifier; // Droid CLI sends this but Codex doesn't support it
+    delete body.previous_response_id; // store=false → backend can't resolve previous resp; avoid 404
+
+    // Final allowlist filter — strip any unknown field that could trigger upstream "routing_unsupported"
+    for (const key of Object.keys(body)) {
+      if (!RESPONSES_API_ALLOWLIST.has(key)) delete body[key];
+    }
 
     return body;
   }

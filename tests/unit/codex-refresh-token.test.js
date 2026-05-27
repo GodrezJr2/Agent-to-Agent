@@ -48,9 +48,55 @@ describe("Codex Refresh Token", () => {
       });
 
       const { refreshCodexToken } = await import("../../open-sse/services/tokenRefresh.js");
-      const result = await refreshCodexToken("old-refresh-token", null);
+      const result = await refreshCodexToken("fallback-refresh-token", null);
 
-      expect(result.refreshToken).toBe("old-refresh-token");
+      expect(result.refreshToken).toBe("fallback-refresh-token");
+    });
+
+    it("deduplicates direct concurrent refreshes and reuses the recent rotated result", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          access_token: "dedup-access",
+          refresh_token: "dedup-rotated-refresh-token",
+          expires_in: 3600,
+        }),
+      });
+
+      const { refreshCodexToken } = await import("../../open-sse/services/tokenRefresh.js");
+      const [first, second] = await Promise.all([
+        refreshCodexToken("dedup-refresh-token", null),
+        refreshCodexToken("dedup-refresh-token", null),
+      ]);
+      const third = await refreshCodexToken("dedup-refresh-token", null);
+
+      expect(first).toEqual(second);
+      expect(third).toEqual(first);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("getAccessToken dedup", () => {
+    it("deduplicates concurrent getAccessToken refreshes for non-Codex providers", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          access_token: "claude-access",
+          refresh_token: "claude-rotated-refresh-token",
+          expires_in: 3600,
+        }),
+      });
+
+      const { getAccessToken } = await import("../../open-sse/services/tokenRefresh.js");
+      const [first, second] = await Promise.all([
+        getAccessToken("claude", { refreshToken: "claude-refresh-token" }, null),
+        getAccessToken("claude", { refreshToken: "claude-refresh-token" }, null),
+      ]);
+      const third = await getAccessToken("claude", { refreshToken: "claude-refresh-token" }, null);
+
+      expect(first).toEqual(second);
+      expect(third).toEqual(first);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
     });
   });
 

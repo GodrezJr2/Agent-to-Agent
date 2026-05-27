@@ -113,10 +113,30 @@ export function createDisconnectAwareStream(transformStream, streamController) {
         }
         controller.enqueue(value);
       } catch (error) {
+        const wasConnected = streamController.isConnected();
         streamController.handleError(error);
         reader.cancel().catch(() => {});
         writer.abort().catch(() => {});
-        controller.error(error);
+
+        const msg = error?.message || "";
+        const code = error?.code || error?.cause?.code || "";
+        const isNetworkClose =
+          error.name === "AbortError" ||
+          msg.includes("aborted") ||
+          msg.includes("socket hang up") ||
+          msg.includes("ECONNRESET") ||
+          msg.includes("ETIMEDOUT") ||
+          msg.includes("EPIPE") ||
+          code === "ECONNRESET" ||
+          code === "ETIMEDOUT" ||
+          code === "EPIPE" ||
+          code === "UND_ERR_SOCKET";
+
+        if (!wasConnected || isNetworkClose) {
+          try { controller.close(); } catch { }
+        } else {
+          try { controller.error(error); } catch { }
+        }
       }
     },
 
