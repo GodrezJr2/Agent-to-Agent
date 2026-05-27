@@ -1,8 +1,14 @@
+# Unreleased
+
+## Fixes
+- Anthropic-compatible providers: strip Claude Code `context_management` before forwarding to gateways that reject unknown top-level fields (#1468)
+
 # v0.4.66-fork.2 (2026-06-01)
 
 ## Agentic Reliability — Root Cause Fixes
 
 This release addresses a set of compounding issues that caused context window exhaustion, silent failures, and broken tool flows during long agentic coding sessions (Claude Code, Codex, and other agentic clients routed through 9router).
+
 
 ### Context Window & Token Efficiency
 
