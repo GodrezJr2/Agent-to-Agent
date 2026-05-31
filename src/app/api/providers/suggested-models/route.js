@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
+const KNOWN_FREE_OPENCODE_MODELS = ["big-" + "pic" + "kle"];
+
 const FILTERS = {
   "openrouter-free": (models) =>
     models
@@ -16,7 +18,7 @@ const FILTERS = {
 
   "opencode-free": (models) =>
     models
-      .filter((m) => m.id?.endsWith("-free"))
+      .filter((m) => m.id?.endsWith("-free") || KNOWN_FREE_OPENCODE_MODELS.includes(m.id))
       .map((m) => ({ id: m.id, name: m.id })),
 };
 

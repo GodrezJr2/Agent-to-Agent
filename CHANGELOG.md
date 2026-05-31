@@ -1,3 +1,20 @@
+# v0.4.66-fork.1 (2026-05-31)
+
+## Targeted upstream backports
+- GitHub Copilot: prevent Gemini/Claude models from being escalated to `/responses`, preserving the real `/chat/completions` error instead of misleading `unsupported_api_for_model` responses.
+- OpenCode: inject required `reasoning_content` placeholders for DeepSeek/Kimi thinking follow-up turns and make model matching case-insensitive.
+- Suggested models: include OpenCode free models that do not use the `-free` suffix.
+- Provider tests: add connection probes for OpenCode Go, Xiaomi MiMo, Xiaomi Token Plan, and Qoder device-token userinfo.
+- Models: add Claude Opus 4.8, GPT 5.4 Mini, and DeepSeek V4 Flash/Pro entries.
+
+## Fork guardrails
+- Preserved Agent-to-Agent README and did not import upstream README changes.
+- Preserved Office / Agent OS / A2A / cron / memory custom features.
+- Preserved local `STREAM_STALL_TIMEOUT_MS = 10 * 60 * 1000` instead of upstream 30s stall timeout.
+- Deferred full Qoder COSY/OAuth provider rewrite to avoid broad conflicts with fork features.
+
+---
+
 # v0.4.63-fork.1 (2026-05-28)
 
 ## Targeted upstream backports

@@ -29,6 +29,7 @@ function withCodexReviewModels(models) {
 export const PROVIDER_MODELS = {
   // OAuth Providers (using alias)
   cc: [  // Claude Code
+    { id: "claude-opus-4-8", name: "Claude Opus 4.8" },
     { id: "claude-opus-4-7", name: "Claude Opus 4.7" },
     { id: "claude-opus-4-6", name: "Claude Opus 4.6" },
     { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
@@ -39,6 +40,7 @@ export const PROVIDER_MODELS = {
   cx: withCodexReviewModels([  // OpenAI Codex
     { id: "gpt-5.5", name: "GPT 5.5" },
     { id: "gpt-5.4", name: "GPT 5.4" },
+    { id: "gpt-5.4-mini", name: "GPT 5.4 Mini" },
     // GPT 5.3 Codex - all thinking levels
     { id: "gpt-5.3-codex", name: "GPT 5.3 Codex" },
     { id: "gpt-5.3-codex-xhigh", name: "GPT 5.3 Codex (xHigh)" },
@@ -398,6 +400,8 @@ export const PROVIDER_MODELS = {
     { id: "Doubao-Seed-2.0-pro", name: "Doubao-Seed-2.0-pro" },
     { id: "Doubao-Seed-2.0-lite", name: "Doubao-Seed-2.0-lite" },
     { id: "Doubao-Seed-Code", name: "Doubao-Seed-Code" },
+    { id: "DeepSeek-V4-Flash", name: "DeepSeek-V4-Flash" },
+    { id: "DeepSeek-V4-Pro", name: "DeepSeek-V4-Pro" },
     { id: "GLM-5.1", name: "GLM-5.1" },
     { id: "MiniMax-M2.7", name: "MiniMax-M2.7" },
     { id: "Kimi-K2.6", name: "Kimi-K2.6" },
