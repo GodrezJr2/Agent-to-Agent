@@ -125,7 +125,7 @@ function FormattedMessage({ content }: { content: string }) {
         // Regular text with inline code + bold support
         const parts = seg.text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
         return (
-          <div key={i} style={{ whiteSpace: "pre-wrap" }}>
+          <div key={i} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-all" }}>
             {parts.map((part, j) => {
               if (part.startsWith("`") && part.endsWith("`")) {
                 return <code key={j} style={{ background: "#1a1a2e", padding: "1px 4px", borderRadius: 3, fontSize: 12, color: "#f59e0b" }}>{part.slice(1, -1)}</code>;
@@ -382,7 +382,7 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
       </div>
 
       {/* Messages */}
-      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: "14px 12px", display: "flex", flexDirection: "column", gap: 12 }}>
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden" style={{ padding: "14px 12px", display: "flex", flexDirection: "column", gap: 12 }}>
         {loading && (
           <div style={{ color: "#4b5563", fontSize: 12, textAlign: "center", marginTop: 20 }}>Loading...</div>
         )}
@@ -407,7 +407,8 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
                   fontSize: 14,
                   maxWidth: "82%",
                   lineHeight: 1.55,
-                  wordBreak: "break-word",
+                  wordBreak: "break-all",
+                  overflowWrap: "anywhere",
                 }}>
                   {msg.content}
                 </div>
@@ -448,7 +449,8 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
                   fontSize: 14,
                   color: "#d1d5db",
                   lineHeight: 1.65,
-                  wordBreak: "break-word",
+                  wordBreak: "break-all",
+                  overflowWrap: "anywhere",
                 }}>
                   {msg.agentId && thoughtBubbles.has(msg.agentId) && (
                     <details style={{ marginBottom: 8, fontSize: 12, color: "#9ca3af", background: "#0f0f1a", borderRadius: 6, padding: "6px 10px" }}>
