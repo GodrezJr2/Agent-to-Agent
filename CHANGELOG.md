@@ -1,3 +1,38 @@
+# v0.4.66-fork.2 (2026-06-01)
+
+## Agentic Reliability — Root Cause Fixes
+
+This release addresses a set of compounding issues that caused context window exhaustion, silent failures, and broken tool flows during long agentic coding sessions (Claude Code, Codex, and other agentic clients routed through 9router).
+
+### Context Window & Token Efficiency
+
+- **Reasoning blob accumulation eliminated** — OpenAI/Codex reasoning models (GPT-4.5, GPT-5.x, o3, o4) attach `reasoning_content` summaries to every assistant turn. With `store=false`, these blobs are unverifiable by the server yet consumed context tokens on every subsequent request, causing O(n²) growth across long sessions. Reasoning items are now stripped before forwarding. Estimated **50–80% reduction in input tokens** for reasoning-model agentic sessions with 20+ tool calls. *(upstream PR [#1599](https://github.com/decolua/9router/pull/1599))*
+
+### Proxy Infrastructure
+
+- **10 MB body limit raised to 128 MB** — Next.js silently truncated requests exceeding 10 MB, returning `"Invalid JSON body"` while logging success. Long agentic sessions with many tool results easily hit this limit. Now configurable via `NEXT_MAX_BODY_SIZE` env var (default `128mb`). *(fixes [#1529](https://github.com/decolua/9router/issues/1529), [#1572](https://github.com/decolua/9router/issues/1572))*
+
+- **Stream stall and connect timeouts are now configurable** — `STREAM_STALL_TIMEOUT_MS` and `FETCH_CONNECT_TIMEOUT_MS` were hardcoded, causing premature disconnects on slow-streaming models (Kiro, large reasoning models). Both are now readable from env vars with a minimum floor guard (5 s / 3 s). *(fixes [#1557](https://github.com/decolua/9router/issues/1557))*
+
+### Claude OAuth (`cc/`) Route Fixes
+
+- **Forced `tool_choice` no longer returns 400** — Two bugs in `openai-to-claude.js` and `claudeCloaking.js` caused `{type:"function", function:{name}}` shaped `tool_choice` payloads to fail: (1) the `"function"` type was forwarded verbatim instead of being translated to Claude's `"tool"` type, and (2) `cloakClaudeTools` applied the `_ide` suffix to tool declarations but not to `tool_choice.name`, so the forced tool no longer matched any declaration. Both are fixed. *(fixes [#1592](https://github.com/decolua/9router/issues/1592))*
+
+- **`role: "system"` in messages no longer causes 400** — The Anthropic API rejects `role: "system"` inside the `messages` array; system content must be the top-level `system` field. `prepareClaudeRequest` now promotes any lingering system/developer-role messages to the top-level `system` field as a safety net for both the passthrough path and any translation edge cases. Eliminates the constant fallback from `cc/claude-sonnet-4-6` to Kiro in combos. *(fixes [#1580](https://github.com/decolua/9router/issues/1580))*
+
+### Provider-Specific Fixes
+
+- **DeepSeek: tool count capped at 8** — DeepSeek returns near-empty responses (~25 tokens) when given 10+ tools, while reporting HTTP 200 and causing silent combo failures. Claude Code natively sends 10–15 tools; OpenCode CLI works because it sends 3–5. A `maxTools: 8` cap per DeepSeek model truncates the tool list before dispatch, keeping the core agentic tools (Bash/Read/Edit/Write/Glob/Grep + 2) and dropping the rest. An observable `[TOOLS] cap` log line is emitted when truncation occurs. *(ref [#1382](https://github.com/decolua/9router/issues/1382))*
+
+- **Antigravity/Gemini: invalid tool schema property values fixed** — Claude Code tool schemas sometimes define properties as plain type strings (e.g. `"field": "object"` shorthand instead of `"field": {"type":"object","properties":{}}`). Vertex AI rejected these with a 400 on all Antigravity models. A new `fixInvalidPropertyValues` phase in `cleanJSONSchemaForAntigravity` converts string-shorthand property values to proper schema objects before translation. *(fixes [#1564](https://github.com/decolua/9router/issues/1564))*
+
+## Fork Guardrails
+
+- Preserved all Agent-to-Agent / Office / A2A / cron / memory custom features.
+- All fixes submitted upstream as PR [#1599](https://github.com/decolua/9router/pull/1599) and PR [#1600](https://github.com/decolua/9router/pull/1600).
+
+---
+
 # v0.4.66-fork.1 (2026-05-31)
 
 ## Targeted upstream backports
