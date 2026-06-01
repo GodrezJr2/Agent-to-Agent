@@ -377,12 +377,12 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
       {/* Header */}
       <div style={{ padding: "10px 14px", borderBottom: "1px solid #1f1f2e", display: "flex", alignItems: "center", gap: 8 }}>
         <div style={{ width: 8, height: 8, borderRadius: "50%", background: sending ? "#4ade80" : "#374151", transition: "background 0.3s", boxShadow: sending ? "0 0 6px #4ade80" : "none" }} />
-        <span style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>Office Chat</span>
-        <span style={{ fontSize: 11, color: "#4b5563", marginLeft: "auto" }}>{agents.length} agent{agents.length !== 1 ? "s" : ""}</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "#e2e8f0" }}>Office Chat</span>
+        <span style={{ fontSize: 12, color: "#4b5563", marginLeft: "auto" }}>{agents.length} agent{agents.length !== 1 ? "s" : ""}</span>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: "12px 10px", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: "14px 12px", display: "flex", flexDirection: "column", gap: 12 }}>
         {loading && (
           <div style={{ color: "#4b5563", fontSize: 12, textAlign: "center", marginTop: 20 }}>Loading...</div>
         )}
@@ -403,10 +403,10 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
                   background: "#1d4ed8",
                   color: "#fff",
                   borderRadius: "12px 12px 2px 12px",
-                  padding: "7px 12px",
-                  fontSize: 13,
-                  maxWidth: "80%",
-                  lineHeight: 1.5,
+                  padding: "9px 14px",
+                  fontSize: 14,
+                  maxWidth: "82%",
+                  lineHeight: 1.55,
                   wordBreak: "break-word",
                 }}>
                   {msg.content}
@@ -418,7 +418,7 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
           if (isSystem) {
             return (
               <div key={msg.id} style={{ display: "flex", justifyContent: "center" }}>
-                <span style={{ fontSize: 11, color: "#f59e0b", background: "rgba(245,158,11,0.1)", borderRadius: 4, padding: "2px 8px" }}>
+                <span style={{ fontSize: 12, color: "#f59e0b", background: "rgba(245,158,11,0.1)", borderRadius: 4, padding: "2px 10px" }}>
                   {msg.content}
                 </span>
               </div>
@@ -437,17 +437,17 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
                 {getAgentInitial(msg.agentId)}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 11, color, fontWeight: 600, marginBottom: 3 }}>
+                <div style={{ fontSize: 12, color, fontWeight: 600, marginBottom: 4 }}>
                   {getAgentName(msg.agentId)}
                 </div>
                 <div style={{
                   background: "#161622",
                   border: "1px solid #1f1f35",
                   borderRadius: "2px 12px 12px 12px",
-                  padding: "8px 11px",
-                  fontSize: 13,
+                  padding: "10px 14px",
+                  fontSize: 14,
                   color: "#d1d5db",
-                  lineHeight: 1.6,
+                  lineHeight: 1.65,
                   wordBreak: "break-word",
                 }}>
                   {msg.agentId && thoughtBubbles.has(msg.agentId) && (
@@ -488,7 +488,7 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
                 {getAgentInitial(agentId)}
               </div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 11, color, fontWeight: 600, marginBottom: 3 }}>
+                <div style={{ fontSize: 12, color, fontWeight: 600, marginBottom: 4 }}>
                   {getAgentName(agentId)}
                 </div>
                 <div style={{
@@ -550,8 +550,8 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
                   {a.name.charAt(0).toUpperCase()}
                 </div>
                 <div>
-                  <span style={{ fontSize: 13, color: "#e2e8f0", fontWeight: 600 }}>{a.name}</span>
-                  {a.role && <span style={{ fontSize: 11, color: "#6b7280", marginLeft: 6 }}>{a.role}</span>}
+                  <span style={{ fontSize: 14, color: "#e2e8f0", fontWeight: 600 }}>{a.name}</span>
+                  {a.role && <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>{a.role}</span>}
                 </div>
               </div>
             ))}
@@ -599,8 +599,8 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
               flex: 1,
               background: "#161622",
               color: "#e2e8f0",
-              fontSize: 13,
-              padding: "8px 12px",
+              fontSize: 14,
+              padding: "9px 14px",
               border: "1px solid #2d2d44",
               borderRadius: 8,
               outline: "none",
@@ -611,10 +611,10 @@ export function ChatPanel({ officeId, agents, onAgentActivity }: ChatPanelProps)
             onClick={handleSend}
             disabled={sending || !input.trim()}
             style={{
-              padding: "8px 16px",
+              padding: "9px 18px",
               background: sending ? "#1d2d44" : "#2563eb",
               color: "#fff",
-              fontSize: 13,
+              fontSize: 14,
               borderRadius: 8,
               border: "none",
               cursor: sending || !input.trim() ? "not-allowed" : "pointer",

@@ -213,7 +213,7 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated, onCron
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+      <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-white text-lg font-semibold">{agent.name}</h2>
           <button onClick={handleDelete} className="text-red-400 text-xs hover:text-red-300">Delete</button>
@@ -282,7 +282,7 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated, onCron
           </div>
           <div>
             <label className="text-gray-400 text-xs">System Prompt</label>
-            <textarea value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)} rows={3} className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-green-500 outline-none resize-none" />
+            <textarea value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)} rows={8} className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-green-500 outline-none resize-y" />
           </div>
             <label className="text-gray-400 text-xs mt-3 block">Thinking Budget (tokens, 0 = disabled)</label>
             <select value={thinkingBudget} onChange={e => setThinkingBudget(Number(e.target.value))} className="w-full bg-gray-800 text-white text-sm px-3 py-2 rounded border border-gray-700 focus:border-green-500 outline-none">
@@ -303,7 +303,7 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated, onCron
         )}
 
         {tab === "tasks" && (
-        <div className="space-y-2 max-h-64 overflow-y-auto">
+        <div className="space-y-2">
           {tasks.length === 0 && <p className="text-gray-500 text-xs text-center py-4">No A2A tasks yet</p>}
           {tasks.map((t: any) => (
             <div key={t.id} className="bg-gray-800 rounded p-2 text-xs">
@@ -390,7 +390,7 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated, onCron
           </div>
 
           {/* Existing jobs */}
-          <div className="space-y-1.5 max-h-48 overflow-y-auto">
+          <div className="space-y-1.5">
             {cronJobs.length === 0 && <p className="text-gray-600 text-xs text-center py-3">No scheduled tasks yet</p>}
             {cronJobs.map((job: any) => (
               <div key={job.id} className="bg-gray-800 rounded p-2.5 flex items-start gap-2">
@@ -950,7 +950,7 @@ export default function OfficePage() {
         <div className="flex-1 relative min-w-0 min-h-0 overflow-hidden">
           <OfficeCanvas onAgentClick={(id) => { const a = agents.find(x => x.id === id); if (a) setEditingAgent(a); }} />
         </div>
-        <div className="w-80 h-full min-h-0 flex-shrink-0 overflow-hidden border-l border-gray-800">
+        <div className="w-96 h-full min-h-0 flex-shrink-0 overflow-hidden border-l border-gray-800">
           <ChatPanel officeId={officeId} agents={agents} onAgentActivity={handleAgentActivity} />
         </div>
       </div>
