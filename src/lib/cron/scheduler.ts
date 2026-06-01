@@ -88,7 +88,8 @@ async function tickCronJobs() {
               prompt = `${step.prompt}\n\n=== Context from previous pipeline steps ===\n${ctx}`;
             }
 
-            await createMessage({ officeId: job.officeId, agentId: step.agentId, role: "system", content: `[Cron pipeline step ${i + 1}/${pipeline.length}] ${step.prompt}` });
+            const promptPreview = step.prompt.length > 80 ? step.prompt.slice(0, 80) + "…" : step.prompt;
+            await createMessage({ officeId: job.officeId, agentId: step.agentId, role: "system", content: `[Pipeline ${i + 1}/${pipeline.length}] ${agent.name}: ${promptPreview}` });
 
             try {
               const output = await callA2A(step.agentId, prompt);
@@ -104,7 +105,8 @@ async function tickCronJobs() {
           const agent = await getAgentById(job.agentId);
           if (!agent) continue;
 
-          await createMessage({ officeId: job.officeId, agentId: job.agentId, role: "system", content: `[Cron: ${job.schedule}] ${job.prompt}` });
+          const singlePreview = job.prompt.length > 80 ? job.prompt.slice(0, 80) + "…" : job.prompt;
+          await createMessage({ officeId: job.officeId, agentId: job.agentId, role: "system", content: `[Cron ${job.schedule}] ${agent.name}: ${singlePreview}` });
 
           try {
             await callA2A(job.agentId, job.prompt);

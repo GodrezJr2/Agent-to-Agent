@@ -342,7 +342,7 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated, onCron
             {cronMode === "single" ? (
               <div>
                 <label className="text-gray-500 text-xs">Prompt</label>
-                <textarea value={cronPrompt} onChange={e => setCronPrompt(e.target.value)} rows={2} placeholder="What should this agent do?" className="w-full bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-blue-500 outline-none resize-none" />
+                <textarea value={cronPrompt} onChange={e => setCronPrompt(e.target.value)} rows={4} placeholder="What should this agent do?" className="w-full bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-blue-500 outline-none resize-y" />
               </div>
             ) : (
               <div className="space-y-1.5">
@@ -360,7 +360,7 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated, onCron
                         <button onClick={() => setPipelineSteps(prev => prev.filter((_,idx) => idx !== i))} className="text-red-400 hover:text-red-300 text-xs px-1">del</button>
                       </div>
                     </div>
-                    <textarea value={step.prompt} onChange={e => setPipelineSteps(prev => prev.map((s, idx) => idx === i ? {...s, prompt: e.target.value} : s))} rows={2} placeholder={`What should step ${i+1} do?`} className="w-full bg-gray-800 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-purple-500 outline-none resize-none" />
+                    <textarea value={step.prompt} onChange={e => setPipelineSteps(prev => prev.map((s, idx) => idx === i ? {...s, prompt: e.target.value} : s))} rows={5} placeholder={`What should step ${i+1} do?`} className="w-full bg-gray-800 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-purple-500 outline-none resize-y" />
                   </div>
                 ))}
                 <button onClick={() => setPipelineSteps(prev => [...prev, {agentId: allAgents[0]?.id || "", prompt: ""}])} className="w-full px-2 py-1 text-xs text-purple-400 border border-dashed border-purple-800 rounded hover:border-purple-500">+ Add step</button>
@@ -498,7 +498,7 @@ function EditAgentModal({ officeId, agent, allAgents, onClose, onUpdated, onCron
                         {i < editSteps.length-1 && <button onClick={() => setEditSteps(prev => { const s=[...prev]; [s[i],s[i+1]]=[s[i+1],s[i]]; return s; })} className="text-gray-500 hover:text-white text-xs px-1">↓</button>}
                         <button onClick={() => setEditSteps(prev => prev.filter((_,idx) => idx !== i))} className="text-red-400 hover:text-red-300 text-xs px-1">✕</button>
                       </div>
-                      <textarea value={step.prompt} onChange={e => setEditSteps(prev => prev.map((s, idx) => idx === i ? {...s, prompt: e.target.value} : s))} rows={2} placeholder={`Step ${i+1} prompt`} className="w-full bg-gray-800 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-purple-500 outline-none resize-none" />
+                      <textarea value={step.prompt} onChange={e => setEditSteps(prev => prev.map((s, idx) => idx === i ? {...s, prompt: e.target.value} : s))} rows={5} placeholder={`Step ${i+1} prompt`} className="w-full bg-gray-800 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-purple-500 outline-none resize-y" />
                     </div>
                   ))}
                   <button onClick={() => setEditSteps(prev => [...prev, {agentId: allAgents[0]?.id || "", prompt: ""}])} className="w-full px-2 py-1 text-xs text-purple-400 border border-dashed border-purple-800 rounded hover:border-purple-500">+ Add step</button>
