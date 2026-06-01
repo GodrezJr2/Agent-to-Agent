@@ -446,12 +446,14 @@ export const PROVIDER_MODELS = {
     { id: "gpt-oss-120b-250805", name: "GPT-OSS-120B" },
   ],
   deepseek: [
-    { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
-    { id: "deepseek-v4-pro-max", name: "DeepSeek V4 Pro Max", upstreamModelId: "deepseek-v4-pro" },
-    { id: "deepseek-v4-pro-none", name: "DeepSeek V4 Pro No Thinking", upstreamModelId: "deepseek-v4-pro" },
-    { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
-    { id: "deepseek-chat", name: "DeepSeek V3.2 Chat" },
-    { id: "deepseek-reasoner", name: "DeepSeek V3.2 Reasoner" },
+    // maxTools: DeepSeek returns near-empty responses with 10+ tools (ref #1382).
+    // Cap at 8 — keeps essential Claude Code tools (Bash/Read/Edit/Write/Glob/Grep + 2 more).
+    { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", maxTools: 8 },
+    { id: "deepseek-v4-pro-max", name: "DeepSeek V4 Pro Max", upstreamModelId: "deepseek-v4-pro", maxTools: 8 },
+    { id: "deepseek-v4-pro-none", name: "DeepSeek V4 Pro No Thinking", upstreamModelId: "deepseek-v4-pro", maxTools: 8 },
+    { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", maxTools: 8 },
+    { id: "deepseek-chat", name: "DeepSeek V3.2 Chat", maxTools: 8 },
+    { id: "deepseek-reasoner", name: "DeepSeek V3.2 Reasoner", maxTools: 8 },
   ],
   commandcode: [
     { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro" },
@@ -931,4 +933,15 @@ export function getModelsByProviderId(providerId) {
 export function getModelStrip(alias, modelId) {
   const entry = PROVIDER_MODELS[alias]?.find(m => m.id === modelId);
   return entry?.strip || [];
+}
+
+// Get max tool count for a model (undefined = no limit).
+// Providers like DeepSeek fail silently with 10+ tools — cap prevents empty responses. Ref #1382.
+export function getModelMaxTools(alias, modelId) {
+  const providerEntry = PROVIDER_MODELS[alias];
+  if (!providerEntry) return undefined;
+  const entry = providerEntry.find(m => m.id === modelId);
+  if (entry?.maxTools !== undefined) return entry.maxTools;
+  // Provider-level default (set on first entry or a sentinel)
+  return providerEntry._maxTools;
 }

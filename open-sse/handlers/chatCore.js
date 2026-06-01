@@ -5,7 +5,7 @@ import { COLORS } from "../utils/stream.js";
 import { createStreamController } from "../utils/streamHandler.js";
 import { refreshWithRetry } from "../services/tokenRefresh.js";
 import { createRequestLogger } from "../utils/requestLogger.js";
-import { getModelTargetFormat, getModelStrip, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.js";
+import { getModelTargetFormat, getModelStrip, getModelMaxTools, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.js";
 import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
 import { HTTP_STATUS } from "../config/runtimeConfig.js";
 import { handleBypassRequest } from "../utils/bypassHandler.js";
@@ -41,6 +41,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const modelTargetFormat = getModelTargetFormat(alias, model);
   const targetFormat = modelTargetFormat || getTargetFormat(provider);
   const stripList = getModelStrip(alias, model);
+  const maxTools = getModelMaxTools(alias, model);
 
   // Inject provider-level thinking config override (only if client hasn't set)
   // on/off → extended type (body.thinking), none/low/medium/high → effort type (body.reasoning_effort)
@@ -123,6 +124,15 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   if (cavemanEnabled && cavemanLevel) {
     injectCaveman(translatedBody, finalFormat, cavemanLevel);
     log?.debug?.("CAVEMAN", `${cavemanLevel} | ${finalFormat}`);
+  }
+
+  // Tool count cap: some providers (DeepSeek) fail silently with 10+ tools.
+  // maxTools truncates to the most relevant tools. Ref #1382.
+  if (maxTools !== undefined && Array.isArray(translatedBody.tools) && translatedBody.tools.length > maxTools) {
+    const before = translatedBody.tools.length;
+    translatedBody.tools = translatedBody.tools.slice(0, maxTools);
+    log?.debug?.("TOOLS", `capped ${before} → ${maxTools} for ${provider}/${model}`);
+    console.log(`${COLORS.yellow}[TOOLS] ${provider.toUpperCase()} | ${model} | tool cap: ${before} → ${maxTools}${COLORS.reset}`);
   }
 
   const executor = getExecutor(provider);
