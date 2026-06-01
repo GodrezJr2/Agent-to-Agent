@@ -294,12 +294,14 @@ function getContentBlocksFromMessage(msg, toolNameMap = new Map()) {
 // Convert OpenAI tool choice to Claude format
 function convertOpenAIToolChoice(choice) {
   if (!choice) return { type: "auto" };
-  if (typeof choice === "object" && choice.type) return choice;
   if (choice === "auto" || choice === "none") return { type: "auto" };
   if (choice === "required") return { type: "any" };
+  // OpenAI forced-tool: { type: "function", function: { name } } → Claude { type: "tool", name }
   if (typeof choice === "object" && choice.function) {
     return { type: "tool", name: choice.function.name };
   }
+  // Already Claude format or unknown string — pass through
+  if (typeof choice === "object" && choice.type) return choice;
   return { type: "auto" };
 }
 
