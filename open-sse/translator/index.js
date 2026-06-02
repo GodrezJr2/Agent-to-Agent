@@ -1,5 +1,5 @@
 import { FORMATS } from "./formats.js";
-import { ensureToolCallIds, fixMissingToolResponses } from "./helpers/toolCallHelper.js";
+import { ensureToolCallIds, fixMissingToolResponses, fixTrailingAssistantMessage } from "./helpers/toolCallHelper.js";
 import { prepareClaudeRequest } from "./helpers/claudeHelper.js";
 import { cloakClaudeTools } from "../utils/claudeCloaking.js";
 import { filterToOpenAIFormat } from "./helpers/openaiHelper.js";
@@ -87,6 +87,11 @@ export function translateRequest(sourceFormat, targetFormat, model, body, stream
   
   // Fix missing tool responses (insert empty tool_result if needed)
   fixMissingToolResponses(result);
+
+  // Mistral requires last message = user/tool. Strip trailing assistant messages with no tool_calls.
+  if (provider === "mistral" || (typeof model === "string" && model.startsWith("mistral/"))) {
+    fixTrailingAssistantMessage(result);
+  }
 
   // If same format, skip translation steps
   if (sourceFormat !== targetFormat) {
