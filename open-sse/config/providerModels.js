@@ -215,9 +215,11 @@ export const PROVIDER_MODELS = {
   oc: [  // OpenCode
     // { id: "nemotron-3-super-free", name: "Nemotron 3 Super" },
     // { id: "qwen3.6-plus-free", name: "Qwen 3.6 Plus" },
-    // { id: "big-pickle", name: "Big Pickle", targetFormat: "claude" },
-    // { id: "minimax-m2.5-free", name: "MiniMax M2.5", targetFormat: "claude" },
     // { id: "trinity-large-preview-free", name: "Trinity Large Preview" },
+    // MiniMax via OpenCode - cap tools at 8 (82 tools causes empty/incomplete tool calls)
+    { id: "minimax-m3-free", name: "MiniMax M3 Free", maxTools: 8 },
+    { id: "minimax-m2.5-free", name: "MiniMax M2.5 Free", maxTools: 8 },
+    { id: "minimax-m3", name: "MiniMax M3", maxTools: 8 },
   ],
 
   cl: [  // Cline
