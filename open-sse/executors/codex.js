@@ -21,6 +21,36 @@ const CODEX_HOSTED_TOOL_TYPES = new Set([
   "image_generation", "web_search", "web_search_preview", "file_search",
   "computer", "computer_use_preview", "code_interpreter", "mcp", "local_shell"
 ]);
+const WEB_SEARCH_TOOL_TYPES = /^web_search/;
+const CLAUDE_WEB_SEARCH_TOOL_TYPES = /^web_search_\d{8}$/;
+
+function isCodexHostedToolType(type) {
+  return CODEX_HOSTED_TOOL_TYPES.has(type) || WEB_SEARCH_TOOL_TYPES.test(type);
+}
+
+function normalizeCodexHostedTool(tool, type) {
+  if (!WEB_SEARCH_TOOL_TYPES.test(type)) return;
+  delete tool.name;
+  delete tool.input_schema;
+
+  const allowedDomains = Array.isArray(tool.allowed_domains)
+    ? tool.allowed_domains
+      .filter(domain => typeof domain === "string" && domain.trim())
+      .map(domain => domain.trim())
+    : [];
+  if (allowedDomains.length > 0) {
+    const filters = tool.filters && typeof tool.filters === "object" && !Array.isArray(tool.filters) ? tool.filters : {};
+    tool.filters = { ...filters, allowed_domains: allowedDomains };
+  }
+
+  delete tool.allowed_domains;
+  delete tool.blocked_domains;
+  delete tool.max_uses;
+
+  if (CLAUDE_WEB_SEARCH_TOOL_TYPES.test(type)) {
+    tool.type = "web_search";
+  }
+}
 
 const RESPONSES_API_ALLOWLIST = new Set([
   "model", "input", "instructions", "tools", "tool_choice", "stream", "store",
@@ -67,8 +97,10 @@ function normalizeCodexTools(body) {
       return true;
     }
     if (type !== "function") {
-      if (!type || tool.function || typeof tool.name === "string") return false;
-      return CODEX_HOSTED_TOOL_TYPES.has(type);
+      if (!type || tool.function) return false;
+      if (!isCodexHostedToolType(type)) return false;
+      normalizeCodexHostedTool(tool, type);
+      return true;
     }
     const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function) ? tool.function : null;
     const rawName = typeof tool.name === "string" ? tool.name : (typeof fn?.name === "string" ? fn.name : "");
