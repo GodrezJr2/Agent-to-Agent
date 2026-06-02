@@ -88,11 +88,6 @@ export function translateRequest(sourceFormat, targetFormat, model, body, stream
   // Fix missing tool responses (insert empty tool_result if needed)
   fixMissingToolResponses(result);
 
-  // Mistral requires last message = user/tool. Strip trailing assistant messages with no tool_calls.
-  if (provider === "mistral" || (typeof model === "string" && model.startsWith("mistral/"))) {
-    fixTrailingAssistantMessage(result);
-  }
-
   // If same format, skip translation steps
   if (sourceFormat !== targetFormat) {
     // Step 1: source -> openai (if source is not openai)
@@ -118,6 +113,10 @@ export function translateRequest(sourceFormat, targetFormat, model, body, stream
   // This handles hybrid requests (e.g., OpenAI messages + Claude tools)
   if (targetFormat === FORMATS.OPENAI) {
     result = filterToOpenAIFormat(result);
+    // Mistral requires last message = user/tool. Apply AFTER translation so tool_calls is populated.
+    if (provider === "mistral" || (typeof model === "string" && model.startsWith("mistral/"))) {
+      fixTrailingAssistantMessage(result);
+    }
   }
 
   // Final step: prepare request for Claude format endpoints
