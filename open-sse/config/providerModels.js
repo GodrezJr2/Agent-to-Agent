@@ -126,21 +126,36 @@ export const PROVIDER_MODELS = {
   ],
   kr: [  // Kiro AI
     // --- Base Claude variants ---
-    // { id: "claude-opus-4.5", name: "Claude Opus 4.5" },
+    { id: "claude-opus-4.7", name: "Claude Opus 4.7" },
+    { id: "claude-opus-4.6", name: "Claude Opus 4.6" },
+    { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
+    { id: "claude-sonnet-4", name: "Claude Sonnet 4" },
     { id: "claude-sonnet-4.5", name: "Claude Sonnet 4.5" },
     { id: "claude-haiku-4.5", name: "Claude Haiku 4.5" },
     { id: "deepseek-3.2", name: "DeepSeek 3.2", strip: ["image", "audio"] },
     { id: "qwen3-coder-next", name: "Qwen3 Coder Next", strip: ["image", "audio"] },
     { id: "glm-5", name: "GLM 5" },
     { id: "MiniMax-M2.5", name: "MiniMax M2.5" },
-    // --- Thinking variants (alias to base; thinking is enabled at request time
-    //     via <thinking_mode>enabled</thinking_mode> system-prompt injection) ---
+    { id: "MiniMax-M2.1", name: "MiniMax M2.1" },
+    // --- Thinking variants ---
+    { id: "claude-opus-4.7-thinking", name: "Claude Opus 4.7 (Thinking)" },
+    { id: "claude-opus-4.6-thinking", name: "Claude Opus 4.6 (Thinking)" },
+    { id: "claude-sonnet-4.6-thinking", name: "Claude Sonnet 4.6 (Thinking)" },
+    { id: "claude-sonnet-4-thinking", name: "Claude Sonnet 4 (Thinking)" },
     { id: "claude-sonnet-4.5-thinking", name: "Claude Sonnet 4.5 (Thinking)" },
     { id: "claude-haiku-4.5-thinking", name: "Claude Haiku 4.5 (Thinking)" },
-    // --- Agentic variants (synthetic; same upstream model + chunked-write
-    //     system prompt to dodge Kiro's 2-3 min server timeout on big writes) ---
+    // --- Agentic variants ---
+    { id: "claude-opus-4.7-agentic", name: "Claude Opus 4.7 (Agentic)" },
+    { id: "claude-opus-4.6-agentic", name: "Claude Opus 4.6 (Agentic)" },
+    { id: "claude-sonnet-4.6-agentic", name: "Claude Sonnet 4.6 (Agentic)" },
+    { id: "claude-sonnet-4-agentic", name: "Claude Sonnet 4 (Agentic)" },
     { id: "claude-sonnet-4.5-agentic", name: "Claude Sonnet 4.5 (Agentic)" },
     { id: "claude-haiku-4.5-agentic", name: "Claude Haiku 4.5 (Agentic)" },
+    // --- Thinking + Agentic variants ---
+    { id: "claude-opus-4.7-thinking-agentic", name: "Claude Opus 4.7 (Thinking + Agentic)" },
+    { id: "claude-opus-4.6-thinking-agentic", name: "Claude Opus 4.6 (Thinking + Agentic)" },
+    { id: "claude-sonnet-4.6-thinking-agentic", name: "Claude Sonnet 4.6 (Thinking + Agentic)" },
+    { id: "claude-sonnet-4-thinking-agentic", name: "Claude Sonnet 4 (Thinking + Agentic)" },
     { id: "claude-sonnet-4.5-thinking-agentic", name: "Claude Sonnet 4.5 (Thinking + Agentic)" },
     { id: "claude-haiku-4.5-thinking-agentic", name: "Claude Haiku 4.5 (Thinking + Agentic)" },
   ],
@@ -206,9 +221,11 @@ export const PROVIDER_MODELS = {
   oc: [  // OpenCode
     // { id: "nemotron-3-super-free", name: "Nemotron 3 Super" },
     // { id: "qwen3.6-plus-free", name: "Qwen 3.6 Plus" },
-    // { id: "big-pickle", name: "Big Pickle", targetFormat: "claude" },
-    // { id: "minimax-m2.5-free", name: "MiniMax M2.5", targetFormat: "claude" },
     // { id: "trinity-large-preview-free", name: "Trinity Large Preview" },
+    // MiniMax via OpenCode - cap tools at 8 (82 tools causes empty/incomplete tool calls)
+    { id: "minimax-m3-free", name: "MiniMax M3 Free", maxTools: 8 },
+    { id: "minimax-m2.5-free", name: "MiniMax M2.5 Free", maxTools: 8 },
+    { id: "minimax-m3", name: "MiniMax M3", maxTools: 8 },
   ],
 
   cl: [  // Cline
@@ -433,12 +450,14 @@ export const PROVIDER_MODELS = {
     { id: "gpt-oss-120b-250805", name: "GPT-OSS-120B" },
   ],
   deepseek: [
-    { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
-    { id: "deepseek-v4-pro-max", name: "DeepSeek V4 Pro Max", upstreamModelId: "deepseek-v4-pro" },
-    { id: "deepseek-v4-pro-none", name: "DeepSeek V4 Pro No Thinking", upstreamModelId: "deepseek-v4-pro" },
-    { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
-    { id: "deepseek-chat", name: "DeepSeek V3.2 Chat" },
-    { id: "deepseek-reasoner", name: "DeepSeek V3.2 Reasoner" },
+    // maxTools: DeepSeek returns near-empty responses with 10+ tools (ref #1382).
+    // Cap at 8 — keeps essential Claude Code tools (Bash/Read/Edit/Write/Glob/Grep + 2 more).
+    { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", maxTools: 8 },
+    { id: "deepseek-v4-pro-max", name: "DeepSeek V4 Pro Max", upstreamModelId: "deepseek-v4-pro", maxTools: 8 },
+    { id: "deepseek-v4-pro-none", name: "DeepSeek V4 Pro No Thinking", upstreamModelId: "deepseek-v4-pro", maxTools: 8 },
+    { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", maxTools: 8 },
+    { id: "deepseek-chat", name: "DeepSeek V3.2 Chat", maxTools: 8 },
+    { id: "deepseek-reasoner", name: "DeepSeek V3.2 Reasoner", maxTools: 8 },
   ],
   commandcode: [
     { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro" },
@@ -617,6 +636,11 @@ export const PROVIDER_MODELS = {
     { id: "expert-search", name: "DeepSeek Expert + Search" },
     { id: "expert-deepthink", name: "DeepSeek Expert + DeepThink" },
     { id: "expert-deepthink-search", name: "DeepSeek Expert + DeepThink + Search" },
+    // Agentic variants — injects chunked-write protocol for reliable tool/file ops
+    { id: "instant-agentic", name: "DeepSeek Instant (Agentic)" },
+    { id: "instant-deepthink-agentic", name: "DeepSeek Instant + DeepThink (Agentic)" },
+    { id: "expert-agentic", name: "DeepSeek Expert (Agentic)" },
+    { id: "expert-deepthink-agentic", name: "DeepSeek Expert + DeepThink (Agentic)" },
   ],
 
   // TTS entries are loaded from ttsModels.js via buildTtsProviderModels()
@@ -915,4 +939,15 @@ export function getModelsByProviderId(providerId) {
 export function getModelStrip(alias, modelId) {
   const entry = PROVIDER_MODELS[alias]?.find(m => m.id === modelId);
   return entry?.strip || [];
+}
+
+// Get max tool count for a model (undefined = no limit).
+// Providers like DeepSeek fail silently with 10+ tools — cap prevents empty responses. Ref #1382.
+export function getModelMaxTools(alias, modelId) {
+  const providerEntry = PROVIDER_MODELS[alias];
+  if (!providerEntry) return undefined;
+  const entry = providerEntry.find(m => m.id === modelId);
+  if (entry?.maxTools !== undefined) return entry.maxTools;
+  // Provider-level default (set on first entry or a sentinel)
+  return providerEntry._maxTools;
 }

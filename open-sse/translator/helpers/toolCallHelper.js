@@ -112,6 +112,22 @@ export function hasToolResults(msg, toolCallIds) {
   return false;
 }
 
+// Strip trailing assistant messages with no tool_calls (Mistral requires last role = user/tool).
+// Call AFTER translation so messages are in OpenAI format (tool_calls field).
+export function fixTrailingAssistantMessage(body) {
+  if (!body.messages || !Array.isArray(body.messages)) return body;
+  while (body.messages.length > 0) {
+    const last = body.messages[body.messages.length - 1];
+    if (last.role !== "assistant") break;
+    // OpenAI format: tool_calls array
+    if (last.tool_calls && last.tool_calls.length > 0) break;
+    // Claude format: tool_use blocks in content (pre-translation safety)
+    if (Array.isArray(last.content) && last.content.some(b => b.type === "tool_use")) break;
+    body.messages.pop();
+  }
+  return body;
+}
+
 // Fix missing tool responses - insert empty tool_result if assistant has tool_use but next message has no tool_result
 export function fixMissingToolResponses(body) {
   if (!body.messages || !Array.isArray(body.messages)) return body;

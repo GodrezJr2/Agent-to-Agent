@@ -60,8 +60,18 @@ export function cloakClaudeTools(body) {
     return { ...msg, content: renamedContent };
   });
 
+  // Apply suffix to tool_choice.name so it resolves to the suffixed tool declaration.
+  // Without this, { type:"tool", name:"todo_write" } won't match "todo_write_ide". Closes #1592.
+  let toolChoice = body.tool_choice;
+  if (toolChoice && typeof toolChoice === "object" && toolChoice.type === "tool" && toolChoice.name) {
+    const suffixedName = `${toolChoice.name}${CLAUDE_TOOL_SUFFIX}`;
+    if (clientDeclarations.some(t => t.name === suffixedName)) {
+      toolChoice = { ...toolChoice, name: suffixedName };
+    }
+  }
+
   return {
-    body: { ...body, tools: allTools, messages: renamedMessages || body.messages },
+    body: { ...body, tools: allTools, messages: renamedMessages || body.messages, tool_choice: toolChoice },
     toolNameMap: toolNameMap.size > 0 ? toolNameMap : null
   };
 }

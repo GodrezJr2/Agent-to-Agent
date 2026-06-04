@@ -4,7 +4,7 @@ import { testProxyUrl } from "@/lib/network/proxyTest";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { PROVIDER_ENDPOINTS } from "@/shared/constants/config";
 import { getDefaultModel } from "open-sse/config/providerModels.js";
-import { resolveOllamaLocalHost } from "open-sse/config/providers.js";
+import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl } from "open-sse/config/providers.js";
 import {
   GEMINI_CONFIG,
   ANTIGRAVITY_CONFIG,
@@ -65,8 +65,8 @@ const OAUTH_TEST_CONFIG = {
   qoder: {
     // Test by hitting Qoder's userinfo endpoint with the device token.
     // refreshable: false because the device-flow refresh endpoint returns
-    // 403 for our flow (users re-login when expired). No checkExpiry —
-    // we want the actual URL probe to run so revoked tokens surface.
+    // 403 for this flow; users re-login when expired. No checkExpiry — run
+    // the actual URL probe so revoked tokens surface.
     url: "https://openapi.qoder.sh/api/v1/userinfo",
     method: "GET",
     authHeader: "Authorization",
@@ -576,6 +576,25 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
         const res = await fetchWithConnectionProxy("https://llm.chutes.ai/v1/models", { headers: { Authorization: `Bearer ${connection.apiKey}` } }, effectiveProxy);
         return { valid: res.ok, error: res.ok ? null : "Invalid API key" };
       }
+      case "opencode-go": {
+        const res = await fetchWithConnectionProxy("https://opencode.ai/zen/go/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${connection.apiKey}` },
+          body: JSON.stringify({ model: getDefaultModel("opencode-go"), messages: [{ role: "user", content: "ping" }], max_tokens: 1, stream: false }),
+        }, effectiveProxy);
+        const valid = res.status !== 401 && res.status !== 403;
+        return { valid, error: valid ? null : "Invalid API key" };
+      }
+      case "xiaomi-mimo":
+      case "xiaomi-tokenplan": {
+        const baseUrl = connection.provider === "xiaomi-tokenplan"
+          ? resolveXiaomiTokenplanBaseUrl(connection)
+          : "https://api.xiaomimimo.com/v1";
+        const res = await fetchWithConnectionProxy(`${baseUrl}/models`, {
+          headers: { Authorization: `Bearer ${connection.apiKey}` },
+        }, effectiveProxy);
+        return { valid: res.ok, error: res.ok ? null : "Invalid API key" };
+      }
       case "deepseek-web": {
         return await probeDeepSeekWebToken(connection.apiKey, {
           fetchImpl: (url, options) => fetchWithConnectionProxy(url, options, effectiveProxy),
@@ -613,23 +632,6 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
         const data = await res.json().catch(() => null);
         const valid = !!(data && data.user);
         return { valid, error: valid ? null : "Session expired — re-paste cookie" };
-      }
-      case "opencode-go": {
-        const res = await fetchWithConnectionProxy("https://opencode.ai/zen/go/v1/chat/completions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${connection.apiKey}` },
-          body: JSON.stringify({ model: getDefaultModel("opencode-go"), messages: [{ role: "user", content: "ping" }], max_tokens: 1, stream: false }),
-        }, effectiveProxy);
-        const valid = res.status !== 401 && res.status !== 403;
-        return { valid, error: valid ? null : "Invalid API key" };
-      }
-      case "xiaomi-mimo":
-      case "xiaomi-tokenplan": {
-        const baseUrls = { "xiaomi-mimo": "https://api.xiaomimimo.com/v1", "xiaomi-tokenplan": "https://token-plan-sgp.xiaomimimo.com/v1" };
-        const res = await fetchWithConnectionProxy(`${baseUrls[connection.provider]}/models`, {
-          headers: { Authorization: `Bearer ${connection.apiKey}` },
-        }, effectiveProxy);
-        return { valid: res.ok, error: res.ok ? null : "Invalid API key" };
       }
       default:
         return { valid: false, error: "Provider test not supported" };

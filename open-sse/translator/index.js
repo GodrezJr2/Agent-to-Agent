@@ -1,5 +1,5 @@
 import { FORMATS } from "./formats.js";
-import { ensureToolCallIds, fixMissingToolResponses } from "./helpers/toolCallHelper.js";
+import { ensureToolCallIds, fixMissingToolResponses, fixTrailingAssistantMessage } from "./helpers/toolCallHelper.js";
 import { prepareClaudeRequest } from "./helpers/claudeHelper.js";
 import { cloakClaudeTools } from "../utils/claudeCloaking.js";
 import { filterToOpenAIFormat } from "./helpers/openaiHelper.js";
@@ -113,6 +113,10 @@ export function translateRequest(sourceFormat, targetFormat, model, body, stream
   // This handles hybrid requests (e.g., OpenAI messages + Claude tools)
   if (targetFormat === FORMATS.OPENAI) {
     result = filterToOpenAIFormat(result);
+    // Mistral requires last message = user/tool. Apply AFTER translation so tool_calls is populated.
+    if (provider === "mistral" || (typeof model === "string" && model.startsWith("mistral/"))) {
+      fixTrailingAssistantMessage(result);
+    }
   }
 
   // Final step: prepare request for Claude format endpoints

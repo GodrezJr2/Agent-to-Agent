@@ -136,15 +136,9 @@ export function createDisconnectAwareStream(transformStream, streamController) {
           code === "UND_ERR_SOCKET";
 
         if (!wasConnected || isNetworkClose) {
-          try {
-            controller.close();
-          } catch (e) {
-            // Stream might already be closed or cancelled
-          }
+          try { controller.close(); } catch { }
         } else {
-          try {
-            controller.error(error);
-          } catch (e) { /* already closed */ }
+          try { controller.error(error); } catch { }
         }
       }
     },

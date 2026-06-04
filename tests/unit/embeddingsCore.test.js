@@ -130,6 +130,22 @@ describe("buildEmbeddingsBody", () => {
     expect(sent.encoding_format).toBe("base64");
   });
 
+  it("gemini dimensions are forwarded as outputDimensionality", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(makeProviderResponse({ embedding: { values: [0.1, 0.2] } }));
+
+    await handleEmbeddingsCore(makeOptions({
+      body: { model: "gemini-embedding-001", input: ["hello", "world"], dimensions: 768 },
+      modelInfo: { provider: "gemini", model: "gemini-embedding-001" },
+      credentials: { apiKey: "gemini-key" },
+    }));
+
+    const [, init] = vi.mocked(fetch).mock.calls[0];
+    const sent = JSON.parse(init.body);
+    expect(sent.requests).toHaveLength(2);
+    expect(sent.requests[0].outputDimensionality).toBe(768);
+    expect(sent.requests[1].outputDimensionality).toBe(768);
+  });
+
   it("no encoding_format in body → defaults to float", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(makeProviderResponse(VALID_EMBEDDING_RESPONSE));
 
