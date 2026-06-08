@@ -9,6 +9,10 @@ describe("BaseExecutor fetch connect timeout", () => {
     vi.restoreAllMocks();
   });
 
+  it("defaults fetch connect timeout to 60 seconds for slow upstream headers", () => {
+    expect(FETCH_CONNECT_TIMEOUT_MS).toBe(60 * 1000);
+  });
+
   it("aborts fetch when upstream does not return response headers", async () => {
     vi.useFakeTimers();
     let capturedSignal;

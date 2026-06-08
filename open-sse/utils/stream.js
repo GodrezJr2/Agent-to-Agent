@@ -95,6 +95,7 @@ export function createSSEStream(options = {}) {
   let accumulatedContent = "";
   let accumulatedThinking = "";
   let ttftAt = null;
+  let sseEmittedCount = 0;
   let currentOpenAIResponsesEvent = null;
   let openAIResponsesTerminalSeen = false;
   let openAIResponsesDoneSent = false;
