@@ -808,6 +808,9 @@ export const PROVIDER_MODELS = {
     { id: "hf:meta-llama/Meta-Llama-3.1-70B-Instruct", name: "Llama 3.1 70B" },
     { id: "hf:Qwen/Qwen2.5-72B-Instruct", name: "Qwen 2.5 72B" },
   ],
+  highwayapi: [
+    { id: "claude-fable-5", name: "Claude Fable 5" },
+  ],
 
   deepgram: [
     { id: "nova-3", name: "Nova 3", type: "stt", params: ["language"] },
