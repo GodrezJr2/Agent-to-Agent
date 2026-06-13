@@ -157,7 +157,7 @@ describe("buildDeepSeekPrompt", () => {
     expect(prompt).toContain("Instructions:\nBe precise");
     expect(prompt).toContain("Current user request:\nList files");
     expect(prompt).toContain("To call a tool, respond with exactly one JSON object");
-    expect(prompt).toContain("- list_files(path:string): List files in a directory");
+    expect(prompt).toContain("- list_files(path:string)");
   });
 
   it("includes assistant tool_calls as history entry so DeepSeek has context", () => {
@@ -1071,15 +1071,20 @@ describe("DeepSeekWebExecutor stateful chaining", () => {
       return new Response("not found", { status: 404 });
     });
 
-    // high message budget so only the BYTE budget can trigger rotation
-    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7, sessionRotateAfter: 100, sessionRotateBytes: 1000 });
+    // high message budget so only the BYTE budget can trigger rotation. Budget
+    // counts DELTA bytes only, so a big tool-result delta is what pushes it over.
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7, sessionRotateAfter: 100, sessionRotateBytes: 300 });
     const conn = { apiKey: "tok-1", connectionId: "conn-bytes" };
     const tools = [{ type: "function", function: { name: "Write", parameters: { type: "object", properties: { file_path: { type: "string" }, content: { type: "string" } } } } }];
+    const bigResult = "R".repeat(600);
+    const tc = { id: "call_x", type: "function", function: { name: "Write", arguments: JSON.stringify({ file_path: "a", content: "b" }) } };
 
-    // turn 1: full agentic prompt (>1000 chars from instructions) pushes bytes over budget
+    // turn 1: new session (full prompt baseline, not counted toward byte budget)
     await exec.execute({ model: "deepseek-web/expert-agentic", body: { messages: [{ role: "user", content: "go" }], tools, stream: false }, stream: false, credentials: conn });
-    // turn 2: byte budget exceeded -> fresh session despite only a few messages
-    await exec.execute({ model: "deepseek-web/expert-agentic", body: { messages: [{ role: "user", content: "go" }, { role: "assistant", content: "ok" }, { role: "user", content: "again" }], tools, stream: false }, stream: false, credentials: conn });
+    // turn 2: reuse -> delta carries a 600-char tool result -> bytes exceed budget
+    await exec.execute({ model: "deepseek-web/expert-agentic", body: { messages: [{ role: "user", content: "go" }, { role: "assistant", tool_calls: [tc] }, { role: "tool", tool_call_id: "call_x", content: bigResult }], tools, stream: false }, stream: false, credentials: conn });
+    // turn 3: byte budget exceeded -> rotate to a fresh session
+    await exec.execute({ model: "deepseek-web/expert-agentic", body: { messages: [{ role: "user", content: "go" }, { role: "assistant", tool_calls: [tc] }, { role: "tool", tool_call_id: "call_x", content: bigResult }, { role: "assistant", content: "done" }, { role: "user", content: "more" }], tools, stream: false }, stream: false, credentials: conn });
 
     const creates = local.filter((c) => c.url.endsWith("/api/v0/chat_session/create"));
     expect(creates).toHaveLength(2);

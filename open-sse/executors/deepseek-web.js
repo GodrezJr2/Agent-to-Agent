@@ -31,7 +31,10 @@ const DEEPSEEK_AGENTIC_SUFFIX = "-agentic";
 // collapses to empty completions past ~90k tokens. Byte-based is the real bound:
 // a few big tool results saturate it long before the message count does.
 const DEFAULT_SESSION_ROTATE_AFTER_MESSAGES = 40;
-const SESSION_ROTATE_BYTES = 36000;
+// Budget counts DELTA bytes only (see rememberSession), so this is roughly how
+// many chars of new turns accumulate on a session before it rotates — NOT the
+// full-prompt baseline. ~80k chars ≈ 20 delta turns.
+const SESSION_ROTATE_BYTES = 80000;
 
 // Live-stream keepalive: while buffering the response phase (after thinking
 // ends) emit an invisible zero-width reasoning delta every HEARTBEAT_MS so the
@@ -189,11 +192,14 @@ function formatToolParameters(tool) {
 
 function formatTools(tools) {
   if (!Array.isArray(tools) || tools.length === 0) return "";
+  // Name + params only, no descriptions. With ~85 tools the descriptions added
+  // ~10-15k chars to EVERY full prompt; the tool names + param names carry
+  // enough signal for the model to call them, and dropping them keeps the
+  // baseline prompt small.
   const lines = tools.map((tool) => {
     const fn = tool?.function || tool || {};
     const name = fn.name || "unnamed";
-    const description = String(fn.description || "").split("\n")[0].slice(0, 160);
-    return `- ${name}(${formatToolParameters(tool)}): ${description}`;
+    return `- ${name}(${formatToolParameters(tool)})`;
   });
   return [
     "Tools are available. Call EXACTLY ONE tool per response — never two tools at once.",
@@ -504,18 +510,13 @@ async function streamDeepSeekFragments(responseBody, onPayload) {
 async function consumeCompletionStream(responseBody, onReasoning) {
   const state = createDeepSeekState();
   let emittedReasoningLen = 0;
-  let frameCount = 0;
-  let firstSample = "";
   await streamDeepSeekFragments(responseBody, (payload) => {
-    frameCount += 1;
-    if (!firstSample) firstSample = JSON.stringify(payload).slice(0, 240);
     applyDeepSeekPayload(payload, state);
     if (state.reasoningContent.length > emittedReasoningLen) {
       onReasoning?.(state.reasoningContent.slice(emittedReasoningLen));
       emittedReasoningLen = state.reasoningContent.length;
     }
   });
-  console.log(`[DSW-DEBUG] consume frames=${frameCount} contentLen=${state.content.length} reasonLen=${state.reasoningContent.length} first=${firstSample}`);
   return summarizeDeepSeekState(state);
 }
 
@@ -1126,8 +1127,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
         preempt: false,
       };
 
-      log?.info?.("DEEPSEEK-WEB", `Query to ${model}, len=${prompt.length}`);
-      console.log(`[DSW-DEBUG] req session=${chatSessionId} reused=${reused} parent=${finalBody.parent_message_id} thinking=${finalBody.thinking_enabled} search=${finalBody.search_enabled} modelType=${finalBody.model_type} promptLen=${prompt.length} stream=${stream}`);
+      log?.info?.("DEEPSEEK-WEB", `Query to ${model}, len=${prompt.length} reused=${reused}`);
       let requestBody = finalBody;
       let completionResponse = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
       if (!completionResponse.ok) return this.errorResponse(completionResponse.status, "DeepSeek completion failed", headers, requestBody);
@@ -1141,7 +1141,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
         // still needs the full response text, so the response phase is buffered
         // behind a zero-width reasoning heartbeat; chaining/retries happen
         // inside the stream (see buildLiveStream).
-        const liveStream = this.buildLiveStream({ firstResponse: completionResponse, finalBody, headers, body, model, flags, credentials, signal, sessionCacheKey });
+        const liveStream = this.buildLiveStream({ firstResponse: completionResponse, finalBody, headers, body, model, flags, credentials, signal, sessionCacheKey, reused });
         const response = new Response(liveStream, { status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } });
         return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: finalBody };
       }
@@ -1167,7 +1167,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       // Success: advance the chain. Only now do we record the new messageCount
       // and chain the next turn to THIS response. Failed/retried attempts above
       // never reach here, so their (bad) sibling messages stay off the path.
-      this.rememberSession(sessionCacheKey, body, parsed, requestBody.prompt?.length || 0);
+      this.rememberSession(sessionCacheKey, body, parsed, requestBody.prompt?.length || 0, reused);
 
       const response = new Response(JSON.stringify(buildOpenAIResponse({ model, prompt: requestBody.prompt, ...parsed })), { status: 200, headers: { "Content-Type": "application/json" } });
       return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: requestBody };
@@ -1178,11 +1178,15 @@ export class DeepSeekWebExecutor extends BaseExecutor {
     }
   }
 
-  rememberSession(key, body, parsed, promptLen = 0) {
+  rememberSession(key, body, parsed, promptLen = 0, reused = false) {
     const entry = this.sessionCache.get(key);
     if (!entry) return;
     entry.messageCount = getMessageCount(body);
-    entry.bytesOnSession = (entry.bytesOnSession ?? 0) + (promptLen || 0);
+    // Only DELTA turns count toward the rotation budget. A full prompt (new
+    // session / rotation / fresh-retry) is the per-session baseline, not
+    // accumulation — counting it would make a single 60k+ full prompt blow a
+    // small budget and force rotation on EVERY turn (deltas never used).
+    entry.bytesOnSession = reused ? (entry.bytesOnSession ?? 0) + (promptLen || 0) : 0;
     entry.updatedAt = Date.now();
     if (parsed?.responseMessageId != null) entry.parentMessageId = parsed.responseMessageId;
   }
@@ -1235,7 +1239,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
     }
   }
 
-  buildLiveStream({ firstResponse, finalBody, headers, body, model, flags, credentials, signal, sessionCacheKey }) {
+  buildLiveStream({ firstResponse, finalBody, headers, body, model, flags, credentials, signal, sessionCacheKey, reused }) {
     const self = this;
     let heartbeat = null;
     let alive = true;
@@ -1266,6 +1270,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
 
         try {
           let requestBody = finalBody;
+          let freshFired = false;
           let summary = await consumeCompletionStream(firstResponse.body, emitReasoning);
 
           if (looksLikeMalformedToolIntent(summary.content, body)) {
@@ -1286,12 +1291,14 @@ export class DeepSeekWebExecutor extends BaseExecutor {
             // session and resend the full prompt once; clean context recovers
             // the turn so the agent loop continues instead of stalling.
             const fresh = await self.retryInFreshSession({ model, body, flags, credentials, signal, sessionCacheKey, emitReasoning });
-            if (fresh) summary = fresh;
+            if (fresh) { summary = fresh; freshFired = true; }
           }
 
           stopHeartbeat();
 
-          if (hasDeepSeekOutput(summary)) self.rememberSession(sessionCacheKey, body, summary, requestBody.prompt?.length || 0);
+          // freshFired => the success landed on a brand-new (full-prompt) session,
+          // so it is a baseline, not a delta — don't count it toward the budget.
+          if (hasDeepSeekOutput(summary)) self.rememberSession(sessionCacheKey, body, summary, requestBody.prompt?.length || 0, reused && !freshFired);
 
           const toolCalls = detectToolCalls(summary.content);
           if (toolCalls.length > 0) {
