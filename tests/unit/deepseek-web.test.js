@@ -28,6 +28,7 @@ describe("mapDeepSeekModel", () => {
       modelType: "default",
       thinkingEnabled: false,
       searchEnabled: false,
+      agentic: false,
     });
   });
 
@@ -36,6 +37,7 @@ describe("mapDeepSeekModel", () => {
       modelType: "expert",
       thinkingEnabled: true,
       searchEnabled: true,
+      agentic: false,
     });
   });
 
@@ -44,6 +46,7 @@ describe("mapDeepSeekModel", () => {
       modelType: "default",
       thinkingEnabled: true,
       searchEnabled: false,
+      agentic: false,
     });
   });
 });
@@ -782,5 +785,126 @@ describe("DeepSeekWebExecutor.execute", () => {
     expect(completionCalls).toHaveLength(2);
     expect(response.status).toBe(502);
     expect(json.error.message).toBe("DeepSeek returned empty completion");
+  });
+});
+
+describe("DeepSeekWebExecutor stateful chaining", () => {
+  let calls;
+  let completionQueue;
+
+  function sseWithId(responseMessageId, content) {
+    return sseResponse([
+      `data: {"request_message_id":${responseMessageId - 1},"response_message_id":${responseMessageId},"model_type":"default"}`,
+      "",
+      `data: {"v":{"response":{"fragments":[{"type":"RESPONSE","content":${JSON.stringify(content)}}]}}}`,
+      "",
+    ].join("\n"));
+  }
+
+  beforeEach(() => {
+    calls = [];
+    completionQueue = [];
+    global.fetch = vi.fn(async (url, opts) => {
+      calls.push({ url, opts, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { chat_session: { id: "session-1" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "challenge-1", salt: "salt-1", signature: "sig-1", difficulty: 3, expire_at: 123456, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/completion")) {
+        const next = completionQueue.shift();
+        return sseWithId(next.id, next.content);
+      }
+      return new Response("not found", { status: 404 });
+    });
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const tools = [{ type: "function", function: { name: "Write", parameters: { type: "object", properties: { file_path: { type: "string" }, content: { type: "string" } } } } }];
+
+  it("chains parent_message_id to the prior response and sends only the delta on reuse", async () => {
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    completionQueue = [
+      { id: 100, content: '{"tool":"Write","args":{"file_path":"a.html","content":"hi"}}' },
+      { id: 200, content: "Done." },
+    ];
+
+    await exec.execute({
+      model: "deepseek-web/expert-agentic",
+      body: { messages: [{ role: "user", content: "build landing page" }], tools, stream: false },
+      stream: false,
+      credentials: { apiKey: "tok-1", connectionId: "conn-chain" },
+    });
+
+    await exec.execute({
+      model: "deepseek-web/expert-agentic",
+      body: {
+        messages: [
+          { role: "user", content: "build landing page" },
+          { role: "assistant", tool_calls: [{ id: "call_w", type: "function", function: { name: "Write", arguments: JSON.stringify({ file_path: "a.html", content: "hi" }) } }] },
+          { role: "tool", tool_call_id: "call_w", content: "file written ok" },
+        ],
+        tools,
+        stream: false,
+      },
+      stream: false,
+      credentials: { apiKey: "tok-1", connectionId: "conn-chain" },
+    });
+
+    const completionCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/completion"));
+    const sessionCreates = calls.filter((call) => call.url.endsWith("/api/v0/chat_session/create"));
+    expect(sessionCreates).toHaveLength(1);
+    expect(completionCalls).toHaveLength(2);
+
+    // turn 1: first contact, no parent
+    expect(completionCalls[0].body.parent_message_id).toBeNull();
+    // turn 2: chained to turn 1's response id
+    expect(completionCalls[1].body.parent_message_id).toBe(100);
+
+    // turn 2 prompt is a delta: carries the new tool result, drops the old user turn
+    expect(completionCalls[1].body.prompt).toContain("file written ok");
+    expect(completionCalls[1].body.prompt).not.toContain("build landing page");
+  });
+
+  it("keeps the same parent_message_id across an in-turn retry instead of advancing", async () => {
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    completionQueue = [
+      { id: 100, content: "ok" },
+      { id: 150, content: "I need a tool. <tool_call name=Write> file_path: a.html" },
+      { id: 200, content: '{"tool":"Write","args":{"file_path":"a.html","content":"hi"}}' },
+    ];
+
+    await exec.execute({
+      model: "deepseek-web/expert-agentic",
+      body: { messages: [{ role: "user", content: "start" }], tools, stream: false },
+      stream: false,
+      credentials: { apiKey: "tok-1", connectionId: "conn-retry" },
+    });
+
+    await exec.execute({
+      model: "deepseek-web/expert-agentic",
+      body: {
+        messages: [
+          { role: "user", content: "start" },
+          { role: "assistant", content: "ok" },
+          { role: "user", content: "now write the file" },
+        ],
+        tools,
+        stream: false,
+      },
+      stream: false,
+      credentials: { apiKey: "tok-1", connectionId: "conn-retry" },
+    });
+
+    const completionCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/completion"));
+    // turn 1 + turn 2 (malformed) + turn 2 (repair) = 3
+    expect(completionCalls).toHaveLength(3);
+    // both turn-2 attempts chain to turn 1's response (100); the bad sibling (150) is never used as parent
+    expect(completionCalls[1].body.parent_message_id).toBe(100);
+    expect(completionCalls[2].body.parent_message_id).toBe(100);
   });
 });

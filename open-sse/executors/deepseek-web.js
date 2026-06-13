@@ -45,7 +45,7 @@ function getMessageCount(body = {}) {
   return Array.isArray(body.messages) ? body.messages.length : 0;
 }
 
-async function getChatSessionId({ model, body, credentials, headers, signal, sessionTtlMs, sessionCache }) {
+async function getChatSession({ model, body, credentials, headers, signal, sessionTtlMs, sessionCache }) {
   const now = Date.now();
   const key = getSessionCacheKey(model, credentials);
   const messageCount = getMessageCount(body);
@@ -55,9 +55,17 @@ async function getChatSessionId({ model, body, credentials, headers, signal, ses
     && messageCount >= cached.messageCount;
 
   if (canReuse) {
-    cached.messageCount = messageCount;
+    // Touch TTL but DO NOT advance messageCount/parentMessageId yet — only on a
+    // successful completion (see rememberSession). Keeps delta + chain correct
+    // if this request fails or is retried.
     cached.updatedAt = now;
-    return cached.chatSessionId;
+    return {
+      key,
+      chatSessionId: cached.chatSessionId,
+      reused: true,
+      prevMessageCount: cached.messageCount,
+      parentMessageId: cached.parentMessageId ?? null,
+    };
   }
 
   const response = await fetch(CHAT_SESSION_CREATE_URL, { method: "POST", headers, body: "{}", signal });
@@ -66,8 +74,8 @@ async function getChatSessionId({ model, body, credentials, headers, signal, ses
   const chatSessionId = data.chat_session?.id;
   if (!chatSessionId) throw new Error("DeepSeek session response missing chat_session.id");
 
-  sessionCache.set(key, { chatSessionId, messageCount, updatedAt: now });
-  return chatSessionId;
+  sessionCache.set(key, { chatSessionId, messageCount: 0, updatedAt: now, parentMessageId: null });
+  return { key, chatSessionId, reused: false, prevMessageCount: 0, parentMessageId: null };
 }
 
 export function mapDeepSeekModel(model, body = {}) {
@@ -156,6 +164,51 @@ function formatTools(tools) {
   ].join("\n");
 }
 
+// Short recency anchor re-stated at the END of every prompt. LLMs weight the
+// last tokens most, so in long sessions the tool-call contract must sit next to
+// the generation point — not only in the far-away Instructions header.
+function buildToolReminder(body = {}) {
+  if (!Array.isArray(body.tools) || body.tools.length === 0) return "";
+  const names = body.tools
+    .map((tool) => tool?.function?.name || tool?.name)
+    .filter(Boolean)
+    .join(", ");
+  return [
+    "Reminder: to act, respond with EXACTLY ONE JSON tool call and nothing else:",
+    '{"tool":"tool_name","args":{}}',
+    names ? `Available tools: ${names}` : "",
+    "One tool per response. If the task is fully complete, answer normally instead.",
+  ].filter(Boolean).join("\n");
+}
+
+// Build a DELTA prompt for a reused DeepSeek session: send only what is new
+// since the last turn (tool results, new user input). Assistant turns are
+// skipped — DeepSeek already holds its own prior outputs in the session, so
+// re-sending them just doubles the history and dilutes the instructions.
+export function buildDeepSeekDeltaPrompt(deltaMessages = [], body = {}) {
+  const parts = [];
+  for (const message of deltaMessages) {
+    const role = message.role === "developer" ? "system" : message.role;
+    if (role === "assistant") continue;
+
+    const text = contentToText(message.content).trim();
+    if (role === "tool") {
+      const truncated = text.length > 800 ? text.slice(0, 800) + "...(truncated)" : text;
+      parts.push(`tool ${message.name || message.tool_call_id || "result"}: ${truncated}`);
+    } else if (role === "user") {
+      if (text) parts.push(`user: ${text}`);
+    } else if (role === "system") {
+      if (text) parts.push(text);
+    }
+  }
+
+  const sections = [];
+  if (parts.length) sections.push(parts.join("\n"));
+  const reminder = buildToolReminder(body);
+  if (reminder) sections.push(reminder);
+  return sections.join("\n\n");
+}
+
 export function buildDeepSeekPrompt(body = {}) {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const instructionParts = [];
@@ -206,7 +259,27 @@ export function buildDeepSeekPrompt(body = {}) {
   }
   if (historyParts.length) sections.push(`Conversation so far:\n${historyParts.join("\n")}`);
   sections.push(`Current user request:\n${currentUser}`);
+  const reminder = buildToolReminder(body);
+  if (reminder) sections.push(reminder);
   return sections.join("\n\n");
+}
+
+// Pick the right prompt for this turn: a small delta for a reused session,
+// otherwise the full prompt (first contact, or empty delta fallback). The
+// `-agentic` chunked-write system prompt is injected only on the full path —
+// reused sessions already carry it from turn 1.
+function buildPromptForSession({ body, flags, reused, prevMessageCount }) {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  if (reused) {
+    const delta = messages.slice(prevMessageCount);
+    const deltaPrompt = buildDeepSeekDeltaPrompt(delta, body);
+    if (deltaPrompt.trim()) return deltaPrompt;
+  }
+  let promptBody = body;
+  if (flags.agentic) {
+    promptBody = { ...body, messages: [{ role: "system", content: KIRO_AGENTIC_SYSTEM_PROMPT }, ...messages] };
+  }
+  return buildDeepSeekPrompt(promptBody);
 }
 
 function parseSseFrames(text) {
@@ -759,21 +832,10 @@ export class DeepSeekWebExecutor extends BaseExecutor {
     }
 
     const flags = mapDeepSeekModel(model, body);
-    let promptBody = body;
-    if (flags.agentic) {
-      const msgs = Array.isArray(body.messages) ? body.messages : [];
-      promptBody = { ...body, messages: [{ role: "system", content: KIRO_AGENTIC_SYSTEM_PROMPT }, ...msgs] };
-    }
-    const prompt = buildDeepSeekPrompt(promptBody);
-    if (!prompt.trim()) {
-      const errResp = new Response(JSON.stringify({ error: { message: "Empty prompt after processing", type: "invalid_request" } }), { status: 400, headers: { "Content-Type": "application/json" } });
-      return { response: errResp, url: CHAT_COMPLETION_URL, headers: {}, transformedBody: body };
-    }
-
     const baseHeaders = buildDeepSeekHeaders(credentials, { referer: `${DEEPSEEK_ORIGIN}/` });
 
     try {
-      const chatSessionId = await getChatSessionId({
+      const session = await getChatSession({
         model,
         body,
         credentials,
@@ -782,7 +844,14 @@ export class DeepSeekWebExecutor extends BaseExecutor {
         sessionTtlMs: this.sessionTtlMs,
         sessionCache: this.sessionCache,
       });
-      if (chatSessionId?.errorStatus) return this.errorResponse(chatSessionId.errorStatus, "DeepSeek session create failed", baseHeaders, body);
+      if (session?.errorStatus) return this.errorResponse(session.errorStatus, "DeepSeek session create failed", baseHeaders, body);
+
+      const { key: sessionCacheKey, chatSessionId, reused, prevMessageCount, parentMessageId } = session;
+      const prompt = buildPromptForSession({ body, flags, reused, prevMessageCount });
+      if (!prompt.trim()) {
+        const errResp = new Response(JSON.stringify({ error: { message: "Empty prompt after processing", type: "invalid_request" } }), { status: 400, headers: { "Content-Type": "application/json" } });
+        return { response: errResp, url: CHAT_COMPLETION_URL, headers: baseHeaders, transformedBody: body };
+      }
 
       const powResponse = await fetch(CREATE_POW_CHALLENGE_URL, { method: "POST", headers: baseHeaders, body: JSON.stringify({ target_path: CHAT_COMPLETION_PATH }), signal });
       if (!powResponse.ok) return this.errorResponse(powResponse.status, "DeepSeek PoW challenge failed", baseHeaders, body);
@@ -793,7 +862,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       const headers = buildDeepSeekHeaders(credentials, { powHeader, referer: `${DEEPSEEK_ORIGIN}/a/chat/s/${chatSessionId}` });
       const finalBody = {
         chat_session_id: chatSessionId,
-        parent_message_id: null,
+        parent_message_id: reused ? parentMessageId : null,
         model_type: flags.modelType,
         prompt,
         ref_file_ids: [],
@@ -826,6 +895,11 @@ export class DeepSeekWebExecutor extends BaseExecutor {
         if (!hasDeepSeekOutput(parsed)) return this.errorResponse(502, "DeepSeek returned empty completion", headers, requestBody);
       }
 
+      // Success: advance the chain. Only now do we record the new messageCount
+      // and chain the next turn to THIS response. Failed/retried attempts above
+      // never reach here, so their (bad) sibling messages stay off the path.
+      this.rememberSession(sessionCacheKey, body, parsed);
+
       const response = stream
         ? new Response(buildStreamingResponse(parsed, model, requestBody.prompt), { status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } })
         : new Response(JSON.stringify(buildOpenAIResponse({ model, prompt: requestBody.prompt, ...parsed })), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -836,6 +910,14 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       const errResp = new Response(JSON.stringify({ error: { message: `DeepSeek Web failed: ${err.message || String(err)}`, type: "upstream_error" } }), { status: 502, headers: { "Content-Type": "application/json" } });
       return { response: errResp, url: CHAT_COMPLETION_URL, headers: baseHeaders, transformedBody: body };
     }
+  }
+
+  rememberSession(key, body, parsed) {
+    const entry = this.sessionCache.get(key);
+    if (!entry) return;
+    entry.messageCount = getMessageCount(body);
+    entry.updatedAt = Date.now();
+    if (parsed?.responseMessageId != null) entry.parentMessageId = parsed.responseMessageId;
   }
 
   errorResponse(status, message, headers, transformedBody) {
