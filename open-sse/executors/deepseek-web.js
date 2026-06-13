@@ -679,6 +679,28 @@ function parseWriteJsonWrapperArgs(text) {
   return findWriteJsonWrappers(text)[0]?.args || null;
 }
 
+// Function-call style for ANY tool, e.g. Read({"file_path":"a.txt","limit":50})
+// or Bash({"command":"ls"}). DeepSeek emits this instead of {"tool":...} on some
+// turns; without this it falls through as plain text and the agent loop stalls.
+function findFunctionStyleCalls(text) {
+  const source = String(text || "");
+  const calls = [];
+  for (const match of source.matchAll(/(?:^|[^A-Za-z0-9_.])([A-Za-z_][\w.]*)\s*\(\s*(?=\{)/g)) {
+    const name = match[1];
+    const braceIndex = match.index + match[0].length;
+    if (source[braceIndex] !== "{") continue;
+    const object = readJsonObject(source, braceIndex);
+    if (!object) continue;
+    let closeIndex = object.end;
+    while (/\s/.test(source[closeIndex] || "")) closeIndex += 1;
+    if (source[closeIndex] !== ")") continue;
+    const parsed = parseToolJsonCandidate(object.json);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+    calls.push({ name, args: unpackToolArgs(parsed) ?? parsed });
+  }
+  return calls;
+}
+
 function isToolObject(parsed) {
   return !!parsed && typeof parsed === "object" && !Array.isArray(parsed)
     && (typeof parsed.tool === "string" || parsed.args != null || parsed.arguments != null);
@@ -759,15 +781,21 @@ function parseToolCallText(text) {
 
   let parsedJson = parseToolJsonCandidate(jsonCandidate);
   if (!parsedJson) parsedJson = findEmbeddedToolObject(unwrapped);
-  if (parsedJson) {
-    toolName = parsedJson?.tool;
+  if (parsedJson && (typeof parsedJson.tool === "string" || parsedJson.args != null || parsedJson.arguments != null)) {
+    toolName = parsedJson.tool;
     parsed = unpackToolArgs(parsedJson);
   } else {
-    const match = unwrapped.match(/<tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool(?:[-_]call)?>/)
-      || unwrapped.match(/^<?tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool(?:[-_]call)?>)?$/);
-    if (!match) return null;
-    toolName = match[1];
-    parsed = parseLooseToolArgs(match[2]);
+    const fnCall = findFunctionStyleCalls(unwrapped)[0];
+    if (fnCall) {
+      toolName = fnCall.name;
+      parsed = fnCall.args;
+    } else {
+      const match = unwrapped.match(/<tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool(?:[-_]call)?>/)
+        || unwrapped.match(/^<?tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool(?:[-_]call)?>)?$/);
+      if (!match) return null;
+      toolName = match[1];
+      parsed = parseLooseToolArgs(match[2]);
+    }
   }
 
   return buildToolCall(toolName, parsed);

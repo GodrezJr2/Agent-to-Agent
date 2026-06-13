@@ -505,6 +505,18 @@ describe("detectToolCall", () => {
     expect(args.head).toBeUndefined();
   });
 
+  it("extracts a function-style Read({...}) call for non-Write tools", () => {
+    const call = detectToolCall('Read({"file_path":"F:\\\\Project\\\\a.html","offset":730,"limit":110})');
+    expect(call.function.name).toBe("Read");
+    expect(JSON.parse(call.function.arguments)).toEqual({ file_path: "F:\\Project\\a.html", offset: 730, limit: 110 });
+  });
+
+  it("extracts a function-style Bash({...}) call after prose", () => {
+    const call = detectToolCall('Let me list files. Bash({"command":"ls -la"})');
+    expect(call.function.name).toBe("Bash");
+    expect(JSON.parse(call.function.arguments)).toEqual({ command: "ls -la" });
+  });
+
   it("extracts a tool_call with <path>/<content> child tags as a Write", () => {
     const text = '<tool_call name="Write">\n<path>a.html</path>\n<content><html>x</html></content>\n</tool_call>';
     const call = detectToolCall(text);
