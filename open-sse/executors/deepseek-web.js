@@ -38,6 +38,16 @@ const DEFAULT_SESSION_ROTATE_AFTER_MESSAGES = 40;
 const HEARTBEAT_MS = 5000;
 const HEARTBEAT_TOKEN = String.fromCharCode(0x200b);
 
+// Tool-result size limits. The delta (the turn a result comes back) is sent to
+// DeepSeek once, then lives in session memory — keep it generous so the model
+// actually SEES file reads instead of re-reading the same chunks forever (which
+// burns context and stalls). The full-prompt history (first turn / fresh-session
+// resend) uses a tighter cap plus a recent-window so a long session's resend
+// doesn't itself blow past the context limit.
+const DELTA_TOOL_RESULT_MAX = 6000;
+const HISTORY_TOOL_RESULT_MAX = 1200;
+const MAX_HISTORY_PARTS = 60;
+
 function stripProviderPrefix(model) {
   return String(model || "instant").replace(/^deepseek-web\//, "");
 }
@@ -224,7 +234,7 @@ export function buildDeepSeekDeltaPrompt(deltaMessages = [], body = {}, { agenti
 
     const text = contentToText(message.content).trim();
     if (role === "tool") {
-      const truncated = text.length > 800 ? text.slice(0, 800) + "...(truncated)" : text;
+      const truncated = text.length > DELTA_TOOL_RESULT_MAX ? text.slice(0, DELTA_TOOL_RESULT_MAX) + "...(truncated)" : text;
       parts.push(`tool ${message.name || message.tool_call_id || "result"}: ${truncated}`);
     } else if (role === "user") {
       if (text) parts.push(`user: ${text}`);
@@ -274,7 +284,7 @@ export function buildDeepSeekPrompt(body = {}, { agentic = false } = {}) {
     } else if (role === "assistant") {
       historyParts.push(`assistant: ${text}`);
     } else if (role === "tool") {
-      const truncated = text.length > 800 ? text.slice(0, 800) + "...(truncated)" : text;
+      const truncated = text.length > HISTORY_TOOL_RESULT_MAX ? text.slice(0, HISTORY_TOOL_RESULT_MAX) + "...(truncated)" : text;
       historyParts.push(`tool ${message.name || message.tool_call_id || "result"}: ${truncated}`);
     }
   }
@@ -288,7 +298,14 @@ export function buildDeepSeekPrompt(body = {}, { agentic = false } = {}) {
   if (instructionParts.length || toolText) {
     sections.push(`Instructions:\n${[...instructionParts, toolText].filter(Boolean).join("\n\n")}`);
   }
-  if (historyParts.length) sections.push(`Conversation so far:\n${historyParts.join("\n")}`);
+  if (historyParts.length) {
+    // Bound the resend: on a very long session keep only the most recent turns
+    // so a fresh-session full prompt stays well under the context limit.
+    const kept = historyParts.length > MAX_HISTORY_PARTS
+      ? ["(earlier turns omitted to bound size)", ...historyParts.slice(-MAX_HISTORY_PARTS)]
+      : historyParts;
+    sections.push(`Conversation so far:\n${kept.join("\n")}`);
+  }
   sections.push(`Current user request:\n${currentUser}`);
   const reminder = buildToolReminder(body, { agentic });
   if (reminder) sections.push(reminder);

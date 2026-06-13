@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   buildDeepSeekHeaders,
   buildDeepSeekPrompt,
+  buildDeepSeekDeltaPrompt,
   buildPowHeaderValue,
   detectToolCall,
   detectToolCalls,
@@ -173,7 +174,7 @@ describe("buildDeepSeekPrompt", () => {
   });
 
   it("truncates long tool results so context stays manageable", () => {
-    const longContent = "x".repeat(2000);
+    const longContent = "x".repeat(5000);
     const prompt = buildDeepSeekPrompt({
       messages: [
         { role: "user", content: "do something" },
@@ -183,8 +184,27 @@ describe("buildDeepSeekPrompt", () => {
 
     const toolLine = prompt.split("\n").find((l) => l.startsWith("tool "));
     expect(toolLine).toBeTruthy();
-    expect(toolLine.length).toBeLessThan(1200);
+    expect(toolLine.length).toBeLessThan(1400); // ~1200 cap + prefix
     expect(toolLine).toContain("...(truncated)");
+  });
+
+  it("keeps large tool results in the delta so the model can see file reads", () => {
+    const read = "L".repeat(4000);
+    const prompt = buildDeepSeekDeltaPrompt([{ role: "tool", tool_call_id: "r1", content: read }], {});
+    // full read present (not truncated to the old 800-char limit) so the model
+    // can actually verify the file instead of re-reading it
+    expect(prompt).toContain(read);
+  });
+
+  it("caps history to recent turns in the full prompt to bound resend size", () => {
+    const messages = [{ role: "user", content: "OLDEST-MARKER" }];
+    for (let i = 1; i < 200; i++) messages.push({ role: i % 2 ? "assistant" : "user", content: `m${i}` });
+    messages.push({ role: "user", content: "NEWEST-MARKER" });
+
+    const prompt = buildDeepSeekPrompt({ messages });
+    expect(prompt).toContain("(earlier turns omitted to bound size)");
+    expect(prompt).not.toContain("OLDEST-MARKER");
+    expect(prompt).toContain("NEWEST-MARKER");
   });
 });
 
