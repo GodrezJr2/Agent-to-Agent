@@ -25,6 +25,12 @@ const MODEL_FLAGS = {
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEEPSEEK_AGENTIC_SUFFIX = "-agentic";
 
+// Rotate the upstream DeepSeek session after this many messages have
+// accumulated on it. Chaining keeps the full history server-side, so without
+// rotation context grows unbounded and DeepSeek collapses to empty completions
+// past ~90k tokens. ~40 messages keeps a comfortable margin under the limit.
+const DEFAULT_SESSION_ROTATE_AFTER_MESSAGES = 40;
+
 // Live-stream keepalive: while buffering the response phase (after thinking
 // ends) emit an invisible zero-width reasoning delta every HEARTBEAT_MS so the
 // client's idle/TTFT timeout never fires. Empty OpenAI deltas are dropped by the
@@ -52,14 +58,22 @@ function getMessageCount(body = {}) {
   return Array.isArray(body.messages) ? body.messages.length : 0;
 }
 
-async function getChatSession({ model, body, credentials, headers, signal, sessionTtlMs, sessionCache }) {
+async function getChatSession({ model, body, credentials, headers, signal, sessionTtlMs, sessionRotateAfter, sessionCache }) {
   const now = Date.now();
   const key = getSessionCacheKey(model, credentials);
   const messageCount = getMessageCount(body);
   const cached = sessionCache.get(key);
+  // Rotate the DeepSeek session once it has carried enough turns. We chain via
+  // parent_message_id, so the upstream session keeps the WHOLE history — it
+  // grows unbounded and DeepSeek degrades to near-empty completions past ~90k
+  // tokens. Rotating starts a fresh session and resends the full prompt once
+  // (resetting upstream context); deltas resume from there. Keeps context bounded.
+  const turnsOnSession = cached ? messageCount - (cached.baseMessageCount ?? 0) : 0;
+  const withinRotateWindow = turnsOnSession < sessionRotateAfter;
   const canReuse = cached
     && now - cached.updatedAt < sessionTtlMs
-    && messageCount >= cached.messageCount;
+    && messageCount >= cached.messageCount
+    && withinRotateWindow;
 
   if (canReuse) {
     // Touch TTL but DO NOT advance messageCount/parentMessageId yet — only on a
@@ -81,7 +95,7 @@ async function getChatSession({ model, body, credentials, headers, signal, sessi
   const chatSessionId = data.chat_session?.id;
   if (!chatSessionId) throw new Error("DeepSeek session response missing chat_session.id");
 
-  sessionCache.set(key, { chatSessionId, messageCount: 0, updatedAt: now, parentMessageId: null });
+  sessionCache.set(key, { chatSessionId, messageCount: 0, baseMessageCount: messageCount, updatedAt: now, parentMessageId: null });
   return { key, chatSessionId, reused: false, prevMessageCount: 0, parentMessageId: null };
 }
 
@@ -952,6 +966,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
     super("deepseek-web", PROVIDERS["deepseek-web"]);
     this.solvePow = options.solvePow || defaultSolvePow;
     this.sessionTtlMs = options.sessionTtlMs || DEFAULT_SESSION_TTL_MS;
+    this.sessionRotateAfter = options.sessionRotateAfter || DEFAULT_SESSION_ROTATE_AFTER_MESSAGES;
     this.sessionCache = new Map();
   }
 
@@ -979,6 +994,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
         headers: baseHeaders,
         signal,
         sessionTtlMs: this.sessionTtlMs,
+        sessionRotateAfter: this.sessionRotateAfter,
         sessionCache: this.sessionCache,
       });
       if (session?.errorStatus) return this.errorResponse(session.errorStatus, "DeepSeek session create failed", baseHeaders, body);

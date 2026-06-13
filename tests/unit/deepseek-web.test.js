@@ -954,6 +954,43 @@ describe("DeepSeekWebExecutor stateful chaining", () => {
     expect(completionCalls[1].body.parent_message_id).toBe(100);
     expect(completionCalls[2].body.parent_message_id).toBe(100);
   });
+
+  it("rotates to a fresh session after the message budget and resends the full prompt", async () => {
+    const local = [];
+    let sessionNo = 0;
+    global.fetch = vi.fn(async (url, opts) => {
+      local.push({ url, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        sessionNo += 1;
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { chat_session: { id: `session-${sessionNo}` } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "c", salt: "s", signature: "sig", difficulty: 3, expire_at: 1, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/completion")) {
+        return sseResponse('data: {"response_message_id":9,"v":{"response":{"fragments":[{"type":"RESPONSE","content":"ok"}]}}}\n\n');
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7, sessionRotateAfter: 4 });
+    const conn = { apiKey: "tok-1", connectionId: "conn-rot" };
+    const mk = (n) => ({ messages: Array.from({ length: n }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `m${i}` })), stream: false });
+
+    await exec.execute({ model: "deepseek-web/instant", body: mk(2), stream: false, credentials: conn }); // create session-1, base=2
+    await exec.execute({ model: "deepseek-web/instant", body: mk(4), stream: false, credentials: conn }); // reuse (4-2=2 < 4)
+    await exec.execute({ model: "deepseek-web/instant", body: mk(6), stream: false, credentials: conn }); // 6-2=4, NOT < 4 -> rotate
+
+    const creates = local.filter((c) => c.url.endsWith("/api/v0/chat_session/create"));
+    const completions = local.filter((c) => c.url.endsWith("/api/v0/chat/completion"));
+    expect(creates).toHaveLength(2); // rotated once after the budget
+    // rotation turn lands on the fresh session with no parent and resends full history
+    expect(completions[2].body.chat_session_id).toBe("session-2");
+    expect(completions[2].body.parent_message_id).toBeNull();
+    expect(completions[2].body.prompt).toContain("m0");
+    // the prior reuse turn was a delta — it did NOT carry the oldest message
+    expect(completions[1].body.prompt).not.toContain("m0");
+  });
 });
 
 describe("DeepSeekWebExecutor live streaming", () => {
