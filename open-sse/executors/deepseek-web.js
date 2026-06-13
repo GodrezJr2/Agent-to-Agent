@@ -629,6 +629,43 @@ function parseWriteJsonWrapperArgs(text) {
   return findWriteJsonWrappers(text)[0]?.args || null;
 }
 
+function isToolObject(parsed) {
+  return !!parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    && (typeof parsed.tool === "string" || parsed.args != null || parsed.arguments != null);
+}
+
+// Find a tool-call JSON object embedded inside prose. DeepSeek frequently
+// ignores "respond with ONLY JSON" and writes a sentence first, then the call
+// in a fenced ```json block, e.g.:
+//   I'll use the X skill.
+//   ```json
+//   {"tool":"Skill","args":{...}}
+//   ```
+// unwrapToolText only strips a fence at the very start/end, so these slip
+// through and get misclassified as a malformed tool intent.
+function findEmbeddedToolObject(text) {
+  const source = String(text || "");
+
+  const fence = source.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) {
+    const parsed = parseToolJsonCandidate(fence[1].trim());
+    if (isToolObject(parsed)) return parsed;
+  }
+
+  let index = source.indexOf("{");
+  while (index !== -1) {
+    const object = readJsonObject(source, index);
+    if (object) {
+      const parsed = parseToolJsonCandidate(object.json);
+      if (isToolObject(parsed)) return parsed;
+      index = source.indexOf("{", object.end);
+    } else {
+      index = source.indexOf("{", index + 1);
+    }
+  }
+  return null;
+}
+
 function buildToolCall(toolName, parsed) {
   if (typeof toolName !== "string" || typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) return null;
   return {
@@ -670,7 +707,8 @@ function parseToolCallText(text) {
         ? `{"${unwrapped}`
         : unwrapped;
 
-  const parsedJson = parseToolJsonCandidate(jsonCandidate);
+  let parsedJson = parseToolJsonCandidate(jsonCandidate);
+  if (!parsedJson) parsedJson = findEmbeddedToolObject(unwrapped);
   if (parsedJson) {
     toolName = parsedJson?.tool;
     parsed = unpackToolArgs(parsedJson);

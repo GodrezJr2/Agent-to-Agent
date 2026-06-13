@@ -467,6 +467,31 @@ describe("detectToolCall", () => {
     expect(detectToolCall("hello world")).toBeNull();
   });
 
+  it("extracts a tool call from a fenced json block placed after prose", () => {
+    const text = 'I\'ll use the frontend-design skill to generate a landing page.\n\n```json\n{"tool":"Skill","args":{"skill":"frontend-design:frontend-design","args":"Create a landing page"}}\n```';
+    const call = detectToolCall(text);
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Skill",
+        arguments: JSON.stringify({ skill: "frontend-design:frontend-design", args: "Create a landing page" }),
+      },
+    });
+  });
+
+  it("extracts a bare tool json object embedded after prose", () => {
+    const text = 'Let me read that file. {"tool":"Read","args":{"file_path":"a.txt"}}';
+    const call = detectToolCall(text);
+    expect(call).toMatchObject({
+      type: "function",
+      function: { name: "Read", arguments: JSON.stringify({ file_path: "a.txt" }) },
+    });
+  });
+
+  it("does not treat plain prose with braces as a tool call", () => {
+    expect(detectToolCall("Use the {placeholder} syntax to insert a value.")).toBeNull();
+  });
+
   it("turns multiple embedded Claude-style tool calls into OpenAI tool calls", () => {
     const calls = detectToolCalls('Read both files.\n<tool_call name="Read">\n{"file_path":"one.txt"}\n</tool_call>\n<tool_call name="Read">\n{"file_path":"two.txt","limit":5}\n</tool_call>');
 
