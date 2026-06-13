@@ -504,13 +504,18 @@ async function streamDeepSeekFragments(responseBody, onPayload) {
 async function consumeCompletionStream(responseBody, onReasoning) {
   const state = createDeepSeekState();
   let emittedReasoningLen = 0;
+  let frameCount = 0;
+  let firstSample = "";
   await streamDeepSeekFragments(responseBody, (payload) => {
+    frameCount += 1;
+    if (!firstSample) firstSample = JSON.stringify(payload).slice(0, 240);
     applyDeepSeekPayload(payload, state);
     if (state.reasoningContent.length > emittedReasoningLen) {
       onReasoning?.(state.reasoningContent.slice(emittedReasoningLen));
       emittedReasoningLen = state.reasoningContent.length;
     }
   });
+  console.log(`[DSW-DEBUG] consume frames=${frameCount} contentLen=${state.content.length} reasonLen=${state.reasoningContent.length} first=${firstSample}`);
   return summarizeDeepSeekState(state);
 }
 
@@ -1122,6 +1127,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       };
 
       log?.info?.("DEEPSEEK-WEB", `Query to ${model}, len=${prompt.length}`);
+      console.log(`[DSW-DEBUG] req session=${chatSessionId} reused=${reused} parent=${finalBody.parent_message_id} thinking=${finalBody.thinking_enabled} search=${finalBody.search_enabled} modelType=${finalBody.model_type} promptLen=${prompt.length} stream=${stream}`);
       let requestBody = finalBody;
       let completionResponse = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
       if (!completionResponse.ok) return this.errorResponse(completionResponse.status, "DeepSeek completion failed", headers, requestBody);
