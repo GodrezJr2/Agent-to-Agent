@@ -189,6 +189,10 @@ function formatTools(tools) {
     "The Bash tool runs PowerShell on Windows. Use PowerShell syntax (Get-ChildItem, not ls; $env:VAR not $VAR).",
     "To call a tool, respond with exactly one JSON object and no markdown:",
     '{"tool":"tool_name","args":{}}',
+    "When an argument holds a large or multi-line value (a file's content, code), JSON escaping breaks easily — use this XML form instead and keep the value RAW (no escaping). Use the real tool name and argument names:",
+    '<tool_call name="tool_name"><parameter name="file_path">FULL_PATH</parameter><parameter name="content">',
+    "...raw multi-line content, exactly as it should be written...",
+    "</parameter></tool_call>",
     "Available tools:",
     ...lines,
     "If no tool is needed, answer normally.",
@@ -216,7 +220,8 @@ function buildToolReminder(body = {}, { agentic = false } = {}) {
     // re-state the one rule that actually breaks things: a single oversized
     // Write gets truncated mid-output and the whole tool call fails.
     lines.push(
-      "For any file over ~300 lines, do NOT inline the whole file in one Write — oversized writes get truncated mid-output and the call fails. Write the first ~250-line chunk, then append the rest with follow-up edits in later turns.",
+      "For file writes/edits, put the content in the XML form so it stays raw (no JSON escaping): <tool_call name=\"WRITE_TOOL\"><parameter name=\"file_path\">PATH</parameter><parameter name=\"content\">...raw content...</parameter></tool_call>",
+      "For any file over ~300 lines, do NOT inline the whole file in one write — oversized writes get truncated mid-output and the call fails. Write the first ~250-line chunk, then append the rest with follow-up edits in later turns.",
     );
   }
   return lines.filter(Boolean).join("\n");
@@ -523,18 +528,41 @@ function parseParameterToolArgs(text) {
   return args;
 }
 
+// Common HTML/SVG element names. When a model dumps raw markup as a tool's
+// content these would otherwise be harvested as bogus arguments.
+const HTML_ELEMENT_TAGS = new Set([
+  "html", "head", "body", "title", "style", "script", "link", "meta", "base",
+  "div", "span", "p", "a", "br", "hr", "img", "picture",
+  "h1", "h2", "h3", "h4", "h5", "h6",
+  "ul", "ol", "li", "dl", "dt", "dd",
+  "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "col", "colgroup",
+  "strong", "em", "b", "i", "u", "s", "small", "sup", "sub", "mark", "code", "pre",
+  "kbd", "samp", "blockquote", "q", "cite", "abbr", "time", "del", "ins",
+  "label", "input", "button", "select", "option", "optgroup", "textarea", "form",
+  "fieldset", "legend", "datalist", "output", "progress", "meter",
+  "nav", "header", "footer", "section", "article", "main", "aside", "figure",
+  "figcaption", "details", "summary", "dialog", "menu", "address", "hgroup",
+  "svg", "path", "g", "rect", "circle", "ellipse", "line", "polyline", "polygon",
+  "text", "defs", "use", "symbol", "stop",
+  "canvas", "video", "audio", "track", "iframe", "embed", "object", "source", "area",
+  "template", "slot", "noscript",
+]);
+
 // Args given as direct child tags instead of <parameter name=...>, e.g.
 //   <tool_call name="Write"><file_path>a.html</file_path><content>...</content></tool_call>
-// `content`/`file-content` may hold HTML (angle brackets), so they are grabbed
-// greedily up to their close tag; other tags are treated as scalars (no nested
-// markup) so we don't misread surrounding HTML as args.
+// Guarded so a model that dumps RAW markup inside a tool_call (no real arg tags)
+// does NOT get its HTML element tags (<title>, <h1>, <p>...) harvested as bogus
+// arguments — that produced invalid Write calls (file_path/content missing,
+// unexpected title/style/h1/... provided).
 function parseChildTagArgs(text) {
   const source = String(text || "");
-  const args = {};
 
-  // Pull the content/file-content block out first (it may hold HTML), then scan
-  // the REMAINDER for scalar tags — otherwise tags inside the HTML body (e.g.
-  // <title>...</title>) get misread as tool args.
+  // Require a real file-op arg tag; otherwise this is almost certainly raw
+  // content, not a child-tag arg set. Returning null lets it fall through to
+  // the malformed-tool repair path instead of emitting a broken tool call.
+  if (!/<(content|file-content|file_path|file-path|path)>/i.test(source)) return null;
+
+  const args = {};
   let scanSource = source;
   const contentMatch = source.match(/<(content|file-content)>\s*([\s\S]*?)\s*<\/(?:content|file-content)>/i);
   if (contentMatch) {
@@ -546,10 +574,13 @@ function parseChildTagArgs(text) {
   for (const match of scalarMatches) {
     const key = match[1];
     if (key === "content" || key === "file-content") continue;
-    if (key === "path") {
+    if (key === "path" || key === "file-path") {
+      // <path> doubles as an SVG element, but here it carried a file-op value;
+      // map it before the HTML blocklist (which also lists "path").
       if (!("file_path" in args)) args.file_path = coerceToolValue(match[2]);
       continue;
     }
+    if (HTML_ELEMENT_TAGS.has(key.toLowerCase())) continue; // never harvest HTML elements as args
     if (!(key in args)) args[key] = coerceToolValue(match[2]);
   }
 

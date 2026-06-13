@@ -537,6 +537,25 @@ describe("detectToolCall", () => {
     expect(JSON.parse(call.function.arguments)).toEqual({ command: "ls -la" });
   });
 
+  it("does not harvest HTML element tags as args when raw markup is dumped in a tool_call", () => {
+    const text = '<tool_call name="Write"><!DOCTYPE html>\n<html><head><title>X</title><style>body{margin:0}</style></head><body><h1>Hi</h1><p>yo</p><label>n</label><option>o</option></body></html></tool_call>';
+    // no file_path/content arg tags -> this is raw HTML, not a valid arg set.
+    // Must NOT become a Write with bogus {title,style,h1,...} args.
+    expect(detectToolCall(text)).toBeNull();
+  });
+
+  it("extracts a Write via <parameter> tags with raw HTML content (no escaping, no leak)", () => {
+    const text = '<tool_call name="Write"><parameter name="file_path">a.html</parameter><parameter name="content"><!DOCTYPE html>\n<html><head><title>X</title></head><body><h1>Hi</h1></body></html></parameter></tool_call>';
+    const call = detectToolCall(text);
+    expect(call.function.name).toBe("Write");
+    const args = JSON.parse(call.function.arguments);
+    expect(args.file_path).toBe("a.html");
+    expect(args.content).toContain("<!DOCTYPE html>");
+    expect(args.content).toContain("<h1>Hi</h1>");
+    expect(args.title).toBeUndefined();
+    expect(args.h1).toBeUndefined();
+  });
+
   it("extracts a tool_call with <path>/<content> child tags as a Write", () => {
     const text = '<tool_call name="Write">\n<path>a.html</path>\n<content><html>x</html></content>\n</tool_call>';
     const call = detectToolCall(text);
