@@ -492,6 +492,39 @@ function parseParameterToolArgs(text) {
   return args;
 }
 
+// Args given as direct child tags instead of <parameter name=...>, e.g.
+//   <tool_call name="Write"><file_path>a.html</file_path><content>...</content></tool_call>
+// `content`/`file-content` may hold HTML (angle brackets), so they are grabbed
+// greedily up to their close tag; other tags are treated as scalars (no nested
+// markup) so we don't misread surrounding HTML as args.
+function parseChildTagArgs(text) {
+  const source = String(text || "");
+  const args = {};
+
+  // Pull the content/file-content block out first (it may hold HTML), then scan
+  // the REMAINDER for scalar tags — otherwise tags inside the HTML body (e.g.
+  // <title>...</title>) get misread as tool args.
+  let scanSource = source;
+  const contentMatch = source.match(/<(content|file-content)>\s*([\s\S]*?)\s*<\/(?:content|file-content)>/i);
+  if (contentMatch) {
+    args.content = contentMatch[2];
+    scanSource = source.slice(0, contentMatch.index) + source.slice(contentMatch.index + contentMatch[0].length);
+  }
+
+  const scalarMatches = [...scanSource.matchAll(/<([a-zA-Z_][\w-]*)>\s*([^<>]*?)\s*<\/\1>/g)];
+  for (const match of scalarMatches) {
+    const key = match[1];
+    if (key === "content" || key === "file-content") continue;
+    if (key === "path") {
+      if (!("file_path" in args)) args.file_path = coerceToolValue(match[2]);
+      continue;
+    }
+    if (!(key in args)) args[key] = coerceToolValue(match[2]);
+  }
+
+  return Object.keys(args).length > 0 ? args : null;
+}
+
 function parseLooseToolArgs(text) {
   try {
     return JSON.parse(text);
@@ -500,6 +533,9 @@ function parseLooseToolArgs(text) {
 
   const parameterArgs = parseParameterToolArgs(text);
   if (parameterArgs) return parameterArgs;
+
+  const childTagArgs = parseChildTagArgs(text);
+  if (childTagArgs) return childTagArgs;
 
   const inner = String(text || "").trim().replace(/^\{\s*|\s*\}$/g, "");
   const keyRe = /(^|,)\s*"([^"]+)"\s*:/g;

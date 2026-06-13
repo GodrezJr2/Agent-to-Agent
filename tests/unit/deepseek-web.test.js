@@ -492,6 +492,28 @@ describe("detectToolCall", () => {
     expect(detectToolCall("Use the {placeholder} syntax to insert a value.")).toBeNull();
   });
 
+  it("extracts a Write tool_call that uses file_path/content child tags with HTML inside", () => {
+    const text = 'Let me write the file.\n\n<tool_call name="Write">\n<file_path>F:\\Project\\Second Brain\\index.html</file_path>\n<content><!DOCTYPE html>\n<html lang="en">\n<head><title>NEXUS</title></head>\n<body>hi</body>\n</html></content>\n</tool_call>';
+    const call = detectToolCall(text);
+    expect(call.function.name).toBe("Write");
+    const args = JSON.parse(call.function.arguments);
+    expect(args.file_path).toBe("F:\\Project\\Second Brain\\index.html");
+    expect(args.content).toContain("<!DOCTYPE html>");
+    expect(args.content).toContain("<title>NEXUS</title>");
+    // tags inside the HTML body must NOT leak in as tool args
+    expect(args.title).toBeUndefined();
+    expect(args.head).toBeUndefined();
+  });
+
+  it("extracts a tool_call with <path>/<content> child tags as a Write", () => {
+    const text = '<tool_call name="Write">\n<path>a.html</path>\n<content><html>x</html></content>\n</tool_call>';
+    const call = detectToolCall(text);
+    expect(call.function.name).toBe("Write");
+    const args = JSON.parse(call.function.arguments);
+    expect(args.file_path).toBe("a.html");
+    expect(args.content).toBe("<html>x</html>");
+  });
+
   it("turns multiple embedded Claude-style tool calls into OpenAI tool calls", () => {
     const calls = detectToolCalls('Read both files.\n<tool_call name="Read">\n{"file_path":"one.txt"}\n</tool_call>\n<tool_call name="Read">\n{"file_path":"two.txt","limit":5}\n</tool_call>');
 
