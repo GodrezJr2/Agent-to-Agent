@@ -908,3 +908,117 @@ describe("DeepSeekWebExecutor stateful chaining", () => {
     expect(completionCalls[2].body.parent_message_id).toBe(100);
   });
 });
+
+describe("DeepSeekWebExecutor live streaming", () => {
+  let calls;
+  let completionQueue;
+
+  function sseThink(responseMessageId, think, response) {
+    return sseResponse([
+      `data: {"request_message_id":${responseMessageId - 1},"response_message_id":${responseMessageId},"model_type":"expert"}`,
+      "",
+      `data: {"v":{"response":{"fragments":[{"type":"THINK","content":${JSON.stringify(think)}}]}}}`,
+      "",
+      `data: {"v":{"response":{"fragments":[{"type":"RESPONSE","content":${JSON.stringify(response)}}]}}}`,
+      "",
+    ].join("\n"));
+  }
+
+  async function drain(response) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let out = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      out += decoder.decode(value, { stream: true });
+    }
+    out += decoder.decode();
+    return out;
+  }
+
+  const tools = [{ type: "function", function: { name: "Write", parameters: { type: "object", properties: { file_path: { type: "string" }, content: { type: "string" } } } } }];
+
+  beforeEach(() => {
+    calls = [];
+    completionQueue = [];
+    global.fetch = vi.fn(async (url, opts) => {
+      calls.push({ url, opts, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { chat_session: { id: "session-1" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "c", salt: "s", signature: "sig", difficulty: 3, expire_at: 1, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/completion")) {
+        const next = completionQueue.shift();
+        return sseThink(next.id, next.think, next.response);
+      }
+      return new Response("not found", { status: 404 });
+    });
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("streams thinking live, then emits the tool call and DONE", async () => {
+    completionQueue = [{ id: 50, think: "thinking...", response: '{"tool":"Write","args":{"file_path":"a.html","content":"hi"}}' }];
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    const { response } = await exec.execute({
+      model: "deepseek-web/expert-deepthink-agentic",
+      body: { messages: [{ role: "user", content: "go" }], tools, stream: true },
+      stream: true,
+      credentials: { apiKey: "tok-1", connectionId: "conn-live" },
+    });
+
+    expect(response.headers.get("Content-Type")).toContain("text/event-stream");
+    const out = await drain(response);
+
+    expect(out).toContain('"reasoning_content":"thinking..."');
+    expect(out).toContain('"name":"Write"');
+    expect(out).toContain('"finish_reason":"tool_calls"');
+    expect(out).toContain("[DONE]");
+    // thinking is flushed live, before the buffered tool call
+    expect(out.indexOf("reasoning_content")).toBeLessThan(out.indexOf("tool_calls"));
+  });
+
+  it("chains parent_message_id across streamed turns and sends only the delta", async () => {
+    completionQueue = [
+      { id: 50, think: "t1", response: '{"tool":"Write","args":{"file_path":"a.html","content":"hi"}}' },
+      { id: 60, think: "t2", response: "Done." },
+    ];
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+
+    const r1 = await exec.execute({
+      model: "deepseek-web/expert-deepthink-agentic",
+      body: { messages: [{ role: "user", content: "go" }], tools, stream: true },
+      stream: true,
+      credentials: { apiKey: "tok-1", connectionId: "conn-live2" },
+    });
+    await drain(r1.response);
+
+    const r2 = await exec.execute({
+      model: "deepseek-web/expert-deepthink-agentic",
+      body: {
+        messages: [
+          { role: "user", content: "go" },
+          { role: "assistant", tool_calls: [{ id: "call_w", type: "function", function: { name: "Write", arguments: JSON.stringify({ file_path: "a.html", content: "hi" }) } }] },
+          { role: "tool", tool_call_id: "call_w", content: "written ok" },
+        ],
+        tools,
+        stream: true,
+      },
+      stream: true,
+      credentials: { apiKey: "tok-1", connectionId: "conn-live2" },
+    });
+    await drain(r2.response);
+
+    const completionCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/completion"));
+    expect(completionCalls).toHaveLength(2);
+    expect(completionCalls[0].body.parent_message_id).toBeNull();
+    expect(completionCalls[1].body.parent_message_id).toBe(50);
+    expect(completionCalls[1].body.prompt).toContain("written ok");
+    expect(completionCalls[1].body.prompt).not.toContain("Current user request");
+  });
+});

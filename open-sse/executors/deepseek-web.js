@@ -25,6 +25,13 @@ const MODEL_FLAGS = {
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEEPSEEK_AGENTIC_SUFFIX = "-agentic";
 
+// Live-stream keepalive: while buffering the response phase (after thinking
+// ends) emit an invisible zero-width reasoning delta every HEARTBEAT_MS so the
+// client's idle/TTFT timeout never fires. Empty OpenAI deltas are dropped by the
+// OpenAI->Claude translator, so the heartbeat must be real reasoning text.
+const HEARTBEAT_MS = 5000;
+const HEARTBEAT_TOKEN = String.fromCharCode(0x200b);
+
 function stripProviderPrefix(model) {
   return String(model || "instant").replace(/^deepseek-web\//, "");
 }
@@ -167,25 +174,35 @@ function formatTools(tools) {
 // Short recency anchor re-stated at the END of every prompt. LLMs weight the
 // last tokens most, so in long sessions the tool-call contract must sit next to
 // the generation point — not only in the far-away Instructions header.
-function buildToolReminder(body = {}) {
+function buildToolReminder(body = {}, { agentic = false } = {}) {
   if (!Array.isArray(body.tools) || body.tools.length === 0) return "";
   const names = body.tools
     .map((tool) => tool?.function?.name || tool?.name)
     .filter(Boolean)
     .join(", ");
-  return [
+  const lines = [
     "Reminder: to act, respond with EXACTLY ONE JSON tool call and nothing else:",
     '{"tool":"tool_name","args":{}}',
     names ? `Available tools: ${names}` : "",
     "One tool per response. If the task is fully complete, answer normally instead.",
-  ].filter(Boolean).join("\n");
+  ];
+  if (agentic) {
+    // The full chunked-write protocol is only injected on turn 1 (see
+    // buildPromptForSession). On delta turns it has decayed out of focus, so
+    // re-state the one rule that actually breaks things: a single oversized
+    // Write gets truncated mid-output and the whole tool call fails.
+    lines.push(
+      "For any file over ~300 lines, do NOT inline the whole file in one Write — oversized writes get truncated mid-output and the call fails. Write the first ~250-line chunk, then append the rest with follow-up edits in later turns.",
+    );
+  }
+  return lines.filter(Boolean).join("\n");
 }
 
 // Build a DELTA prompt for a reused DeepSeek session: send only what is new
 // since the last turn (tool results, new user input). Assistant turns are
 // skipped — DeepSeek already holds its own prior outputs in the session, so
 // re-sending them just doubles the history and dilutes the instructions.
-export function buildDeepSeekDeltaPrompt(deltaMessages = [], body = {}) {
+export function buildDeepSeekDeltaPrompt(deltaMessages = [], body = {}, { agentic = false } = {}) {
   const parts = [];
   for (const message of deltaMessages) {
     const role = message.role === "developer" ? "system" : message.role;
@@ -204,12 +221,12 @@ export function buildDeepSeekDeltaPrompt(deltaMessages = [], body = {}) {
 
   const sections = [];
   if (parts.length) sections.push(parts.join("\n"));
-  const reminder = buildToolReminder(body);
+  const reminder = buildToolReminder(body, { agentic });
   if (reminder) sections.push(reminder);
   return sections.join("\n\n");
 }
 
-export function buildDeepSeekPrompt(body = {}) {
+export function buildDeepSeekPrompt(body = {}, { agentic = false } = {}) {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const instructionParts = [];
   const historyParts = [];
@@ -259,7 +276,7 @@ export function buildDeepSeekPrompt(body = {}) {
   }
   if (historyParts.length) sections.push(`Conversation so far:\n${historyParts.join("\n")}`);
   sections.push(`Current user request:\n${currentUser}`);
-  const reminder = buildToolReminder(body);
+  const reminder = buildToolReminder(body, { agentic });
   if (reminder) sections.push(reminder);
   return sections.join("\n\n");
 }
@@ -272,14 +289,14 @@ function buildPromptForSession({ body, flags, reused, prevMessageCount }) {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   if (reused) {
     const delta = messages.slice(prevMessageCount);
-    const deltaPrompt = buildDeepSeekDeltaPrompt(delta, body);
+    const deltaPrompt = buildDeepSeekDeltaPrompt(delta, body, { agentic: flags.agentic });
     if (deltaPrompt.trim()) return deltaPrompt;
   }
   let promptBody = body;
   if (flags.agentic) {
     promptBody = { ...body, messages: [{ role: "system", content: KIRO_AGENTIC_SYSTEM_PROMPT }, ...messages] };
   }
-  return buildDeepSeekPrompt(promptBody);
+  return buildDeepSeekPrompt(promptBody, { agentic: flags.agentic });
 }
 
 function parseSseFrames(text) {
@@ -357,8 +374,8 @@ function applyDeepSeekPayload(payload, state) {
   }
 }
 
-export function parseDeepSeekSse(text) {
-  const state = {
+function createDeepSeekState() {
+  return {
     content: "",
     reasoningContent: "",
     usage: {},
@@ -369,6 +386,81 @@ export function parseDeepSeekSse(text) {
     currentFragmentIndex: null,
     fragments: [],
   };
+}
+
+function summarizeDeepSeekState(state) {
+  return {
+    content: state.content,
+    reasoningContent: state.reasoningContent,
+    usage: state.usage,
+    requestMessageId: state.requestMessageId,
+    responseMessageId: state.responseMessageId,
+    modelType: state.modelType,
+  };
+}
+
+function frameToPayload(frameText) {
+  if (!frameText) return null;
+  const dataLines = [];
+  for (const rawLine of frameText.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+  }
+  const data = dataLines.join("\n");
+  if (!data || data === "[DONE]") return null;
+  try {
+    return JSON.parse(data);
+  } catch {
+    return null;
+  }
+}
+
+// Read a DeepSeek completion stream incrementally, applying each SSE frame to
+// `state` as it arrives and invoking onPayload after each. Lets the caller emit
+// reasoning deltas live (keepalive) instead of buffering the whole response.
+async function streamDeepSeekFragments(responseBody, onPayload) {
+  const reader = responseBody.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split(/\r?\n\r?\n/);
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        const payload = frameToPayload(part);
+        if (payload) await onPayload(payload);
+      }
+    }
+    buffer += decoder.decode();
+    for (const part of buffer.split(/\r?\n\r?\n/)) {
+      const payload = frameToPayload(part);
+      if (payload) await onPayload(payload);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// Consume one completion stream, streaming THINK fragments out via onReasoning
+// as they grow, and return the same summary shape as parseDeepSeekSse.
+async function consumeCompletionStream(responseBody, onReasoning) {
+  const state = createDeepSeekState();
+  let emittedReasoningLen = 0;
+  await streamDeepSeekFragments(responseBody, (payload) => {
+    applyDeepSeekPayload(payload, state);
+    if (state.reasoningContent.length > emittedReasoningLen) {
+      onReasoning?.(state.reasoningContent.slice(emittedReasoningLen));
+      emittedReasoningLen = state.reasoningContent.length;
+    }
+  });
+  return summarizeDeepSeekState(state);
+}
+
+export function parseDeepSeekSse(text) {
+  const state = createDeepSeekState();
 
   for (const frame of parseSseFrames(text)) {
     if (!frame.data || frame.data === "[DONE]") continue;
@@ -378,14 +470,7 @@ export function parseDeepSeekSse(text) {
     }
   }
 
-  return {
-    content: state.content,
-    reasoningContent: state.reasoningContent,
-    usage: state.usage,
-    requestMessageId: state.requestMessageId,
-    responseMessageId: state.responseMessageId,
-    modelType: state.modelType,
-  };
+  return summarizeDeepSeekState(state);
 }
 
 function coerceToolValue(value) {
@@ -788,28 +873,6 @@ function buildEmptyCompletionRetryPrompt(prompt, body = {}) {
   ].filter(Boolean).join("\n");
 }
 
-function buildStreamingResponse(parsed, model, prompt) {
-  const encoder = new TextEncoder();
-  const created = Math.floor(Date.now() / 1000);
-  const id = `chatcmpl-deepseek-web-${crypto.randomUUID().slice(0, 12)}`;
-  return new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null, logprobs: null }] })));
-      const toolCalls = detectToolCalls(parsed.content);
-      if (toolCalls.length > 0) {
-        controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { tool_calls: toolCalls.map((toolCall, index) => ({ index, id: toolCall.id, type: "function", function: { name: toolCall.function.name, arguments: toolCall.function.arguments } })) }, finish_reason: null, logprobs: null }] })));
-        controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls", logprobs: null }] })));
-      } else {
-        if (parsed.reasoningContent) controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { reasoning_content: parsed.reasoningContent }, finish_reason: null, logprobs: null }] })));
-        if (parsed.content) controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content: parsed.content }, finish_reason: null, logprobs: null }] })));
-        controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "stop", logprobs: null }] })));
-      }
-      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-      controller.close();
-    },
-  });
-}
-
 export class DeepSeekWebExecutor extends BaseExecutor {
   constructor(options = {}) {
     super("deepseek-web", PROVIDERS["deepseek-web"]);
@@ -877,6 +940,19 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       if (!completionResponse.ok) return this.errorResponse(completionResponse.status, "DeepSeek completion failed", headers, requestBody);
       if (!completionResponse.body) return this.errorResponse(502, "DeepSeek returned empty response body", headers, requestBody);
 
+      if (stream) {
+        // Stream live: forward DeepSeek thinking as it arrives so the client
+        // sees bytes within ~1-2s. Buffering the whole response (incl. long
+        // thinking) before the first byte is what tripped the client's
+        // time-to-first-token timeout and caused the retry loop. Tool detection
+        // still needs the full response text, so the response phase is buffered
+        // behind a zero-width reasoning heartbeat; chaining/retries happen
+        // inside the stream (see buildLiveStream).
+        const liveStream = this.buildLiveStream({ firstResponse: completionResponse, finalBody, headers, body, model, signal, sessionCacheKey });
+        const response = new Response(liveStream, { status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } });
+        return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: finalBody };
+      }
+
       let parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
       if (looksLikeMalformedToolIntent(parsed.content, body)) {
         requestBody = { ...finalBody, prompt: buildToolRepairPrompt(parsed.content, body) };
@@ -900,10 +976,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       // never reach here, so their (bad) sibling messages stay off the path.
       this.rememberSession(sessionCacheKey, body, parsed);
 
-      const response = stream
-        ? new Response(buildStreamingResponse(parsed, model, requestBody.prompt), { status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } })
-        : new Response(JSON.stringify(buildOpenAIResponse({ model, prompt: requestBody.prompt, ...parsed })), { status: 200, headers: { "Content-Type": "application/json" } });
-
+      const response = new Response(JSON.stringify(buildOpenAIResponse({ model, prompt: requestBody.prompt, ...parsed })), { status: 200, headers: { "Content-Type": "application/json" } });
       return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: requestBody };
     } catch (err) {
       log?.error?.("DEEPSEEK-WEB", err.message || String(err));
@@ -918,6 +991,77 @@ export class DeepSeekWebExecutor extends BaseExecutor {
     entry.messageCount = getMessageCount(body);
     entry.updatedAt = Date.now();
     if (parsed?.responseMessageId != null) entry.parentMessageId = parsed.responseMessageId;
+  }
+
+  buildLiveStream({ firstResponse, finalBody, headers, body, model, signal, sessionCacheKey }) {
+    const self = this;
+    let heartbeat = null;
+    let alive = true;
+    const stopHeartbeat = () => {
+      alive = false;
+      if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+    };
+
+    return new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        const created = Math.floor(Date.now() / 1000);
+        const id = `chatcmpl-deepseek-web-${crypto.randomUUID().slice(0, 12)}`;
+        const emit = (delta, finishReason = null) => {
+          try {
+            controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason: finishReason, logprobs: null }] })));
+          } catch {
+          }
+        };
+        const emitReasoning = (text) => { if (text) emit({ reasoning_content: text }); };
+        const done = () => {
+          try { controller.enqueue(encoder.encode("data: [DONE]\n\n")); } catch { }
+          try { controller.close(); } catch { }
+        };
+
+        emit({ role: "assistant" });
+        heartbeat = setInterval(() => { if (alive) emitReasoning(HEARTBEAT_TOKEN); }, HEARTBEAT_MS);
+
+        try {
+          let requestBody = finalBody;
+          let summary = await consumeCompletionStream(firstResponse.body, emitReasoning);
+
+          if (looksLikeMalformedToolIntent(summary.content, body)) {
+            requestBody = { ...finalBody, prompt: buildToolRepairPrompt(summary.content, body) };
+            const repair = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
+            if (repair.ok && repair.body) summary = await consumeCompletionStream(repair.body, emitReasoning);
+          }
+
+          if (!hasDeepSeekOutput(summary)) {
+            requestBody = { ...finalBody, prompt: buildEmptyCompletionRetryPrompt(requestBody.prompt, body) };
+            const retry = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
+            if (retry.ok && retry.body) summary = await consumeCompletionStream(retry.body, emitReasoning);
+          }
+
+          stopHeartbeat();
+
+          if (hasDeepSeekOutput(summary)) self.rememberSession(sessionCacheKey, body, summary);
+
+          const toolCalls = detectToolCalls(summary.content);
+          if (toolCalls.length > 0) {
+            emit({ tool_calls: toolCalls.map((toolCall, index) => ({ index, id: toolCall.id, type: "function", function: { name: toolCall.function.name, arguments: toolCall.function.arguments } })) });
+            emit({}, "tool_calls");
+          } else if (summary.content) {
+            emit({ content: summary.content }, "stop");
+          } else {
+            emit({ content: "[DeepSeek Web returned an empty completion]" }, "stop");
+          }
+          done();
+        } catch (err) {
+          stopHeartbeat();
+          emit({ content: `[DeepSeek Web error: ${err?.message || String(err)}]` }, "stop");
+          done();
+        }
+      },
+      cancel() {
+        stopHeartbeat();
+      },
+    });
   }
 
   errorResponse(status, message, headers, transformedBody) {
