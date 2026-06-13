@@ -188,11 +188,11 @@ describe("buildDeepSeekPrompt", () => {
     expect(toolLine).toContain("...(truncated)");
   });
 
-  it("keeps large tool results in the delta so the model can see file reads", () => {
-    const read = "L".repeat(4000);
+  it("keeps meaningful tool results in the delta so the model can see file reads", () => {
+    const read = "L".repeat(2000);
     const prompt = buildDeepSeekDeltaPrompt([{ role: "tool", tool_call_id: "r1", content: read }], {});
-    // full read present (not truncated to the old 800-char limit) so the model
-    // can actually verify the file instead of re-reading it
+    // a 2000-char read is kept whole (not truncated to the old 800-char limit)
+    // so the model can verify the file instead of re-reading it
     expect(prompt).toContain(read);
   });
 
@@ -1032,15 +1032,47 @@ describe("DeepSeekWebExecutor stateful chaining", () => {
     await exec.execute({ model: "deepseek-web/instant", body: mk(4), stream: false, credentials: conn }); // reuse (4-2=2 < 4)
     await exec.execute({ model: "deepseek-web/instant", body: mk(6), stream: false, credentials: conn }); // 6-2=4, NOT < 4 -> rotate
 
-    const creates = local.filter((c) => c.url.endsWith("/api/v0/chat_session/create"));
+    const creates2 = local.filter((c) => c.url.endsWith("/api/v0/chat_session/create"));
     const completions = local.filter((c) => c.url.endsWith("/api/v0/chat/completion"));
-    expect(creates).toHaveLength(2); // rotated once after the budget
+    expect(creates2).toHaveLength(2); // rotated once after the budget
     // rotation turn lands on the fresh session with no parent and resends full history
     expect(completions[2].body.chat_session_id).toBe("session-2");
     expect(completions[2].body.parent_message_id).toBeNull();
     expect(completions[2].body.prompt).toContain("m0");
     // the prior reuse turn was a delta — it did NOT carry the oldest message
     expect(completions[1].body.prompt).not.toContain("m0");
+  });
+
+  it("rotates to a fresh session once prompt bytes exceed the budget (low message count)", async () => {
+    const local = [];
+    let sessionNo = 0;
+    global.fetch = vi.fn(async (url, opts) => {
+      local.push({ url, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        sessionNo += 1;
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { chat_session: { id: `session-${sessionNo}` } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "c", salt: "s", signature: "sig", difficulty: 3, expire_at: 1, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/completion")) {
+        return sseResponse('data: {"response_message_id":9,"v":{"response":{"fragments":[{"type":"RESPONSE","content":"ok"}]}}}\n\n');
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    // high message budget so only the BYTE budget can trigger rotation
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7, sessionRotateAfter: 100, sessionRotateBytes: 1000 });
+    const conn = { apiKey: "tok-1", connectionId: "conn-bytes" };
+    const tools = [{ type: "function", function: { name: "Write", parameters: { type: "object", properties: { file_path: { type: "string" }, content: { type: "string" } } } } }];
+
+    // turn 1: full agentic prompt (>1000 chars from instructions) pushes bytes over budget
+    await exec.execute({ model: "deepseek-web/expert-agentic", body: { messages: [{ role: "user", content: "go" }], tools, stream: false }, stream: false, credentials: conn });
+    // turn 2: byte budget exceeded -> fresh session despite only a few messages
+    await exec.execute({ model: "deepseek-web/expert-agentic", body: { messages: [{ role: "user", content: "go" }, { role: "assistant", content: "ok" }, { role: "user", content: "again" }], tools, stream: false }, stream: false, credentials: conn });
+
+    const creates = local.filter((c) => c.url.endsWith("/api/v0/chat_session/create"));
+    expect(creates).toHaveLength(2);
   });
 });
 

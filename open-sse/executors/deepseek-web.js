@@ -25,11 +25,13 @@ const MODEL_FLAGS = {
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEEPSEEK_AGENTIC_SUFFIX = "-agentic";
 
-// Rotate the upstream DeepSeek session after this many messages have
-// accumulated on it. Chaining keeps the full history server-side, so without
-// rotation context grows unbounded and DeepSeek collapses to empty completions
-// past ~90k tokens. ~40 messages keeps a comfortable margin under the limit.
+// Rotate the upstream DeepSeek session after this many messages OR this many
+// prompt bytes have accumulated on it (whichever first). Chaining keeps the full
+// history server-side, so without rotation context grows unbounded and DeepSeek
+// collapses to empty completions past ~90k tokens. Byte-based is the real bound:
+// a few big tool results saturate it long before the message count does.
 const DEFAULT_SESSION_ROTATE_AFTER_MESSAGES = 40;
+const SESSION_ROTATE_BYTES = 36000;
 
 // Live-stream keepalive: while buffering the response phase (after thinking
 // ends) emit an invisible zero-width reasoning delta every HEARTBEAT_MS so the
@@ -44,9 +46,9 @@ const HEARTBEAT_TOKEN = String.fromCharCode(0x200b);
 // burns context and stalls). The full-prompt history (first turn / fresh-session
 // resend) uses a tighter cap plus a recent-window so a long session's resend
 // doesn't itself blow past the context limit.
-const DELTA_TOOL_RESULT_MAX = 6000;
-const HISTORY_TOOL_RESULT_MAX = 1200;
-const MAX_HISTORY_PARTS = 60;
+const DELTA_TOOL_RESULT_MAX = 2500;
+const HISTORY_TOOL_RESULT_MAX = 800;
+const MAX_HISTORY_PARTS = 40;
 
 function stripProviderPrefix(model) {
   return String(model || "instant").replace(/^deepseek-web\//, "");
@@ -68,7 +70,7 @@ function getMessageCount(body = {}) {
   return Array.isArray(body.messages) ? body.messages.length : 0;
 }
 
-async function getChatSession({ model, body, credentials, headers, signal, sessionTtlMs, sessionRotateAfter, sessionCache }) {
+async function getChatSession({ model, body, credentials, headers, signal, sessionTtlMs, sessionRotateAfter, sessionRotateBytes = SESSION_ROTATE_BYTES, sessionCache }) {
   const now = Date.now();
   const key = getSessionCacheKey(model, credentials);
   const messageCount = getMessageCount(body);
@@ -78,8 +80,13 @@ async function getChatSession({ model, body, credentials, headers, signal, sessi
   // grows unbounded and DeepSeek degrades to near-empty completions past ~90k
   // tokens. Rotating starts a fresh session and resends the full prompt once
   // (resetting upstream context); deltas resume from there. Keeps context bounded.
+  // Rotate on whichever comes first: too many turns, OR too many prompt bytes
+  // sent on this session. Byte-based is what actually matters — a few big tool
+  // results (e.g. reading a large existing file) saturate DeepSeek long before
+  // the message count does, which message-count-only rotation missed.
   const turnsOnSession = cached ? messageCount - (cached.baseMessageCount ?? 0) : 0;
-  const withinRotateWindow = turnsOnSession < sessionRotateAfter;
+  const bytesOnSession = cached?.bytesOnSession ?? 0;
+  const withinRotateWindow = turnsOnSession < sessionRotateAfter && bytesOnSession < sessionRotateBytes;
   const canReuse = cached
     && now - cached.updatedAt < sessionTtlMs
     && messageCount >= cached.messageCount
@@ -105,7 +112,7 @@ async function getChatSession({ model, body, credentials, headers, signal, sessi
   const chatSessionId = data.chat_session?.id;
   if (!chatSessionId) throw new Error("DeepSeek session response missing chat_session.id");
 
-  sessionCache.set(key, { chatSessionId, messageCount: 0, baseMessageCount: messageCount, updatedAt: now, parentMessageId: null });
+  sessionCache.set(key, { chatSessionId, messageCount: 0, baseMessageCount: messageCount, bytesOnSession: 0, updatedAt: now, parentMessageId: null });
   return { key, chatSessionId, reused: false, prevMessageCount: 0, parentMessageId: null };
 }
 
@@ -1043,6 +1050,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
     this.solvePow = options.solvePow || defaultSolvePow;
     this.sessionTtlMs = options.sessionTtlMs || DEFAULT_SESSION_TTL_MS;
     this.sessionRotateAfter = options.sessionRotateAfter || DEFAULT_SESSION_ROTATE_AFTER_MESSAGES;
+    this.sessionRotateBytes = options.sessionRotateBytes || SESSION_ROTATE_BYTES;
     this.sessionCache = new Map();
   }
 
@@ -1071,6 +1079,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
         signal,
         sessionTtlMs: this.sessionTtlMs,
         sessionRotateAfter: this.sessionRotateAfter,
+        sessionRotateBytes: this.sessionRotateBytes,
         sessionCache: this.sessionCache,
       });
       if (session?.errorStatus) return this.errorResponse(session.errorStatus, "DeepSeek session create failed", baseHeaders, body);
@@ -1140,7 +1149,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       // Success: advance the chain. Only now do we record the new messageCount
       // and chain the next turn to THIS response. Failed/retried attempts above
       // never reach here, so their (bad) sibling messages stay off the path.
-      this.rememberSession(sessionCacheKey, body, parsed);
+      this.rememberSession(sessionCacheKey, body, parsed, requestBody.prompt?.length || 0);
 
       const response = new Response(JSON.stringify(buildOpenAIResponse({ model, prompt: requestBody.prompt, ...parsed })), { status: 200, headers: { "Content-Type": "application/json" } });
       return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: requestBody };
@@ -1151,10 +1160,11 @@ export class DeepSeekWebExecutor extends BaseExecutor {
     }
   }
 
-  rememberSession(key, body, parsed) {
+  rememberSession(key, body, parsed, promptLen = 0) {
     const entry = this.sessionCache.get(key);
     if (!entry) return;
     entry.messageCount = getMessageCount(body);
+    entry.bytesOnSession = (entry.bytesOnSession ?? 0) + (promptLen || 0);
     entry.updatedAt = Date.now();
     if (parsed?.responseMessageId != null) entry.parentMessageId = parsed.responseMessageId;
   }
@@ -1180,7 +1190,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       const baseHeaders = buildDeepSeekHeaders(credentials, { referer: `${DEEPSEEK_ORIGIN}/` });
       const session = await getChatSession({
         model, body, credentials, headers: baseHeaders, signal,
-        sessionTtlMs: this.sessionTtlMs, sessionRotateAfter: this.sessionRotateAfter, sessionCache: this.sessionCache,
+        sessionTtlMs: this.sessionTtlMs, sessionRotateAfter: this.sessionRotateAfter, sessionRotateBytes: this.sessionRotateBytes, sessionCache: this.sessionCache,
       });
       if (!session || session.errorStatus || !session.chatSessionId) return null;
 
@@ -1263,7 +1273,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
 
           stopHeartbeat();
 
-          if (hasDeepSeekOutput(summary)) self.rememberSession(sessionCacheKey, body, summary);
+          if (hasDeepSeekOutput(summary)) self.rememberSession(sessionCacheKey, body, summary, requestBody.prompt?.length || 0);
 
           const toolCalls = detectToolCalls(summary.content);
           if (toolCalls.length > 0) {
