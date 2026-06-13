@@ -49,6 +49,10 @@ const HEARTBEAT_TOKEN = String.fromCharCode(0x200b);
 const DELTA_TOOL_RESULT_MAX = 2500;
 const HISTORY_TOOL_RESULT_MAX = 800;
 const MAX_HISTORY_PARTS = 40;
+// Cap the inbound client system prompt in full prompts. Claude Code et al. send
+// a ~50k-char system prompt; carried untruncated it made every full/fresh prompt
+// start near DeepSeek's context limit.
+const MAX_INSTRUCTIONS_CHARS = 6000;
 
 function stripProviderPrefix(model) {
   return String(model || "instant").replace(/^deepseek-web\//, "");
@@ -308,7 +312,15 @@ export function buildDeepSeekPrompt(body = {}, { agentic = false } = {}) {
   const sections = [];
   const toolText = formatTools(body.tools);
   if (instructionParts.length || toolText) {
-    sections.push(`Instructions:\n${[...instructionParts, toolText].filter(Boolean).join("\n\n")}`);
+    // Cap the client system prompt. Claude Code (and similar agents) send a
+    // ~50k-char system prompt (agent rules + every tool description) that we
+    // would otherwise carry untruncated into EVERY full prompt, so each fresh
+    // session/rotation started near saturation. The agentic chunked-write rules
+    // we prepend sit first (kept), tool definitions are re-provided by toolText,
+    // so the model still has what it needs.
+    let instr = instructionParts.filter(Boolean).join("\n\n");
+    if (instr.length > MAX_INSTRUCTIONS_CHARS) instr = instr.slice(0, MAX_INSTRUCTIONS_CHARS) + "\n...(instructions truncated)";
+    sections.push(`Instructions:\n${[instr, toolText].filter(Boolean).join("\n\n")}`);
   }
   if (historyParts.length) {
     // Bound the resend: on a very long session keep only the most recent turns

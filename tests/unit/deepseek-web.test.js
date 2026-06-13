@@ -196,6 +196,16 @@ describe("buildDeepSeekPrompt", () => {
     expect(prompt).toContain(read);
   });
 
+  it("caps a giant client system prompt in the full prompt", () => {
+    const bigSystem = "S".repeat(50000);
+    const prompt = buildDeepSeekPrompt({
+      messages: [{ role: "system", content: bigSystem }, { role: "user", content: "hi" }],
+    });
+    expect(prompt).toContain("...(instructions truncated)");
+    expect(prompt.length).toBeLessThan(12000); // not the raw ~50k
+    expect(prompt).toContain("Current user request:\nhi");
+  });
+
   it("caps history to recent turns in the full prompt to bound resend size", () => {
     const messages = [{ role: "user", content: "OLDEST-MARKER" }];
     for (let i = 1; i < 200; i++) messages.push({ role: i % 2 ? "assistant" : "user", content: `m${i}` });
