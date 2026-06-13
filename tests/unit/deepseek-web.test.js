@@ -1105,4 +1105,45 @@ describe("DeepSeekWebExecutor live streaming", () => {
     expect(completionCalls[1].body.prompt).toContain("written ok");
     expect(completionCalls[1].body.prompt).not.toContain("Current user request");
   });
+
+  it("recovers from an empty completion by retrying in a fresh session", async () => {
+    let sessionNo = 0;
+    let completionNo = 0;
+    const local = [];
+    global.fetch = vi.fn(async (url, opts) => {
+      local.push({ url, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        sessionNo += 1;
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { chat_session: { id: `session-${sessionNo}` } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "c", salt: "s", signature: "sig", difficulty: 3, expire_at: 1, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/completion")) {
+        completionNo += 1;
+        // first session: empty + in-session empty-retry both return nothing
+        if (completionNo <= 2) return sseResponse("event: ready\ndata: {}\n\n");
+        // fresh session recovers with a real tool call
+        return sseThink(70, "recovered", '{"tool":"Read","args":{"file_path":"a.txt"}}');
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    const { response } = await exec.execute({
+      model: "deepseek-web/expert-deepthink-agentic",
+      body: { messages: [{ role: "user", content: "verify the file" }], tools, stream: true },
+      stream: true,
+      credentials: { apiKey: "tok-1", connectionId: "conn-fresh" },
+    });
+    const out = await drain(response);
+
+    const creates = local.filter((c) => c.url.endsWith("/api/v0/chat_session/create"));
+    const completions = local.filter((c) => c.url.endsWith("/api/v0/chat/completion"));
+    expect(creates).toHaveLength(2); // initial + fresh session after empties
+    expect(completions).toHaveLength(3); // empty, in-session retry, fresh recovers
+    expect(completions[2].body.parent_message_id).toBeNull(); // fresh session = no parent
+    expect(out).toContain('"name":"Read"'); // recovered tool call
+    expect(out).not.toContain("empty completion");
+  });
 });

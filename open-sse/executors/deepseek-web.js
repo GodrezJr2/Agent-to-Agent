@@ -1038,7 +1038,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
         // still needs the full response text, so the response phase is buffered
         // behind a zero-width reasoning heartbeat; chaining/retries happen
         // inside the stream (see buildLiveStream).
-        const liveStream = this.buildLiveStream({ firstResponse: completionResponse, finalBody, headers, body, model, signal, sessionCacheKey });
+        const liveStream = this.buildLiveStream({ firstResponse: completionResponse, finalBody, headers, body, model, flags, credentials, signal, sessionCacheKey });
         const response = new Response(liveStream, { status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } });
         return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: finalBody };
       }
@@ -1083,7 +1083,55 @@ export class DeepSeekWebExecutor extends BaseExecutor {
     if (parsed?.responseMessageId != null) entry.parentMessageId = parsed.responseMessageId;
   }
 
-  buildLiveStream({ firstResponse, finalBody, headers, body, model, signal, sessionCacheKey }) {
+  async getPowHeaders(credentials, chatSessionId, signal) {
+    const baseHeaders = buildDeepSeekHeaders(credentials, { referer: `${DEEPSEEK_ORIGIN}/` });
+    const powResponse = await fetch(CREATE_POW_CHALLENGE_URL, { method: "POST", headers: baseHeaders, body: JSON.stringify({ target_path: CHAT_COMPLETION_PATH }), signal });
+    if (!powResponse.ok) throw new Error(`DeepSeek PoW challenge failed (${powResponse.status})`);
+    const powData = await parseJsonResponse(powResponse, "DeepSeek PoW challenge");
+    const answer = await this.solvePow(powData.challenge);
+    const powHeader = buildPowHeaderValue({ ...powData.challenge, answer, target_path: CHAT_COMPLETION_PATH });
+    return buildDeepSeekHeaders(credentials, { powHeader, referer: `${DEEPSEEK_ORIGIN}/a/chat/s/${chatSessionId}` });
+  }
+
+  // Recover an empty completion by starting a fresh DeepSeek session and
+  // resending the full prompt once. Resets the upstream context that had
+  // saturated. Returns a parsed summary on success, or null (caller keeps the
+  // empty result). The cache is updated so subsequent turns delta off the new
+  // session via rememberSession in the caller.
+  async retryInFreshSession({ model, body, flags, credentials, signal, sessionCacheKey, emitReasoning }) {
+    try {
+      this.sessionCache.delete(sessionCacheKey);
+      const baseHeaders = buildDeepSeekHeaders(credentials, { referer: `${DEEPSEEK_ORIGIN}/` });
+      const session = await getChatSession({
+        model, body, credentials, headers: baseHeaders, signal,
+        sessionTtlMs: this.sessionTtlMs, sessionRotateAfter: this.sessionRotateAfter, sessionCache: this.sessionCache,
+      });
+      if (!session || session.errorStatus || !session.chatSessionId) return null;
+
+      const prompt = buildPromptForSession({ body, flags, reused: false, prevMessageCount: 0 });
+      if (!prompt.trim()) return null;
+
+      const headers = await this.getPowHeaders(credentials, session.chatSessionId, signal);
+      const finalBody = {
+        chat_session_id: session.chatSessionId,
+        parent_message_id: null,
+        model_type: flags.modelType,
+        prompt,
+        ref_file_ids: [],
+        thinking_enabled: flags.thinkingEnabled,
+        search_enabled: flags.searchEnabled,
+        preempt: false,
+      };
+      const resp = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(finalBody), signal });
+      if (!resp.ok || !resp.body) return null;
+      const summary = await consumeCompletionStream(resp.body, emitReasoning);
+      return hasDeepSeekOutput(summary) ? summary : null;
+    } catch {
+      return null;
+    }
+  }
+
+  buildLiveStream({ firstResponse, finalBody, headers, body, model, flags, credentials, signal, sessionCacheKey }) {
     const self = this;
     let heartbeat = null;
     let alive = true;
@@ -1126,6 +1174,15 @@ export class DeepSeekWebExecutor extends BaseExecutor {
             requestBody = { ...finalBody, prompt: buildEmptyCompletionRetryPrompt(requestBody.prompt, body) };
             const retry = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
             if (retry.ok && retry.body) summary = await consumeCompletionStream(retry.body, emitReasoning);
+          }
+
+          if (!hasDeepSeekOutput(summary)) {
+            // In-session retries failed — the upstream session is likely
+            // saturated (chained history grew too large). Start a brand new
+            // session and resend the full prompt once; clean context recovers
+            // the turn so the agent loop continues instead of stalling.
+            const fresh = await self.retryInFreshSession({ model, body, flags, credentials, signal, sessionCacheKey, emitReasoning });
+            if (fresh) summary = fresh;
           }
 
           stopHeartbeat();
