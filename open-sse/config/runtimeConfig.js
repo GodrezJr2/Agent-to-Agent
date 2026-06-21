@@ -42,7 +42,7 @@ export const STREAM_STALL_TIMEOUT_MS = process.env.STREAM_STALL_TIMEOUT_MS
 // Configurable via FETCH_CONNECT_TIMEOUT_MS env var (ms). Closes #1557.
 export const FETCH_CONNECT_TIMEOUT_MS = process.env.FETCH_CONNECT_TIMEOUT_MS
   ? Math.max(3000, parseInt(process.env.FETCH_CONNECT_TIMEOUT_MS, 10))
-  : 20 * 1000;
+  : 60 * 1000;
 
 // Default token limits
 export const DEFAULT_MAX_TOKENS = 64000;

@@ -25,6 +25,38 @@ const MODEL_FLAGS = {
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEEPSEEK_AGENTIC_SUFFIX = "-agentic";
 
+// Rotate the upstream DeepSeek session after this many messages OR this many
+// prompt bytes have accumulated on it (whichever first). Chaining keeps the full
+// history server-side, so without rotation context grows unbounded and DeepSeek
+// collapses to empty completions past ~90k tokens. Byte-based is the real bound:
+// a few big tool results saturate it long before the message count does.
+const DEFAULT_SESSION_ROTATE_AFTER_MESSAGES = 40;
+// Budget counts DELTA bytes only (see rememberSession), so this is roughly how
+// many chars of new turns accumulate on a session before it rotates — NOT the
+// full-prompt baseline. ~80k chars ≈ 20 delta turns.
+const SESSION_ROTATE_BYTES = 80000;
+
+// Live-stream keepalive: while buffering the response phase (after thinking
+// ends) emit an invisible zero-width reasoning delta every HEARTBEAT_MS so the
+// client's idle/TTFT timeout never fires. Empty OpenAI deltas are dropped by the
+// OpenAI->Claude translator, so the heartbeat must be real reasoning text.
+const HEARTBEAT_MS = 5000;
+const HEARTBEAT_TOKEN = String.fromCharCode(0x200b);
+
+// Tool-result size limits. The delta (the turn a result comes back) is sent to
+// DeepSeek once, then lives in session memory — keep it generous so the model
+// actually SEES file reads instead of re-reading the same chunks forever (which
+// burns context and stalls). The full-prompt history (first turn / fresh-session
+// resend) uses a tighter cap plus a recent-window so a long session's resend
+// doesn't itself blow past the context limit.
+const DELTA_TOOL_RESULT_MAX = 2500;
+const HISTORY_TOOL_RESULT_MAX = 800;
+const MAX_HISTORY_PARTS = 40;
+// Cap the inbound client system prompt in full prompts. Claude Code et al. send
+// a ~50k-char system prompt; carried untruncated it made every full/fresh prompt
+// start near DeepSeek's context limit.
+const MAX_INSTRUCTIONS_CHARS = 6000;
+
 function stripProviderPrefix(model) {
   return String(model || "instant").replace(/^deepseek-web\//, "");
 }
@@ -45,19 +77,40 @@ function getMessageCount(body = {}) {
   return Array.isArray(body.messages) ? body.messages.length : 0;
 }
 
-async function getChatSessionId({ model, body, credentials, headers, signal, sessionTtlMs, sessionCache }) {
+async function getChatSession({ model, body, credentials, headers, signal, sessionTtlMs, sessionRotateAfter, sessionRotateBytes = SESSION_ROTATE_BYTES, sessionCache }) {
   const now = Date.now();
   const key = getSessionCacheKey(model, credentials);
   const messageCount = getMessageCount(body);
   const cached = sessionCache.get(key);
+  // Rotate the DeepSeek session once it has carried enough turns. We chain via
+  // parent_message_id, so the upstream session keeps the WHOLE history — it
+  // grows unbounded and DeepSeek degrades to near-empty completions past ~90k
+  // tokens. Rotating starts a fresh session and resends the full prompt once
+  // (resetting upstream context); deltas resume from there. Keeps context bounded.
+  // Rotate on whichever comes first: too many turns, OR too many prompt bytes
+  // sent on this session. Byte-based is what actually matters — a few big tool
+  // results (e.g. reading a large existing file) saturate DeepSeek long before
+  // the message count does, which message-count-only rotation missed.
+  const turnsOnSession = cached ? messageCount - (cached.baseMessageCount ?? 0) : 0;
+  const bytesOnSession = cached?.bytesOnSession ?? 0;
+  const withinRotateWindow = turnsOnSession < sessionRotateAfter && bytesOnSession < sessionRotateBytes;
   const canReuse = cached
     && now - cached.updatedAt < sessionTtlMs
-    && messageCount >= cached.messageCount;
+    && messageCount >= cached.messageCount
+    && withinRotateWindow;
 
   if (canReuse) {
-    cached.messageCount = messageCount;
+    // Touch TTL but DO NOT advance messageCount/parentMessageId yet — only on a
+    // successful completion (see rememberSession). Keeps delta + chain correct
+    // if this request fails or is retried.
     cached.updatedAt = now;
-    return cached.chatSessionId;
+    return {
+      key,
+      chatSessionId: cached.chatSessionId,
+      reused: true,
+      prevMessageCount: cached.messageCount,
+      parentMessageId: cached.parentMessageId ?? null,
+    };
   }
 
   const response = await fetch(CHAT_SESSION_CREATE_URL, { method: "POST", headers, body: "{}", signal });
@@ -66,8 +119,8 @@ async function getChatSessionId({ model, body, credentials, headers, signal, ses
   const chatSessionId = data.chat_session?.id;
   if (!chatSessionId) throw new Error("DeepSeek session response missing chat_session.id");
 
-  sessionCache.set(key, { chatSessionId, messageCount, updatedAt: now });
-  return chatSessionId;
+  sessionCache.set(key, { chatSessionId, messageCount: 0, baseMessageCount: messageCount, bytesOnSession: 0, updatedAt: now, parentMessageId: null });
+  return { key, chatSessionId, reused: false, prevMessageCount: 0, parentMessageId: null };
 }
 
 export function mapDeepSeekModel(model, body = {}) {
@@ -139,24 +192,87 @@ function formatToolParameters(tool) {
 
 function formatTools(tools) {
   if (!Array.isArray(tools) || tools.length === 0) return "";
+  // Name + params only, no descriptions. With ~85 tools the descriptions added
+  // ~10-15k chars to EVERY full prompt; the tool names + param names carry
+  // enough signal for the model to call them, and dropping them keeps the
+  // baseline prompt small.
   const lines = tools.map((tool) => {
     const fn = tool?.function || tool || {};
     const name = fn.name || "unnamed";
-    const description = String(fn.description || "").split("\n")[0].slice(0, 160);
-    return `- ${name}(${formatToolParameters(tool)}): ${description}`;
+    return `- ${name}(${formatToolParameters(tool)})`;
   });
   return [
     "Tools are available. Call EXACTLY ONE tool per response — never two tools at once.",
     "The Bash tool runs PowerShell on Windows. Use PowerShell syntax (Get-ChildItem, not ls; $env:VAR not $VAR).",
     "To call a tool, respond with exactly one JSON object and no markdown:",
     '{"tool":"tool_name","args":{}}',
+    "When an argument holds a large or multi-line value (a file's content, code), JSON escaping breaks easily — use this XML form instead and keep the value RAW (no escaping). Use the real tool name and argument names:",
+    '<tool_call name="tool_name"><parameter name="file_path">FULL_PATH</parameter><parameter name="content">',
+    "...raw multi-line content, exactly as it should be written...",
+    "</parameter></tool_call>",
     "Available tools:",
     ...lines,
     "If no tool is needed, answer normally.",
   ].join("\n");
 }
 
-export function buildDeepSeekPrompt(body = {}) {
+// Short recency anchor re-stated at the END of every prompt. LLMs weight the
+// last tokens most, so in long sessions the tool-call contract must sit next to
+// the generation point — not only in the far-away Instructions header.
+function buildToolReminder(body = {}, { agentic = false } = {}) {
+  if (!Array.isArray(body.tools) || body.tools.length === 0) return "";
+  const names = body.tools
+    .map((tool) => tool?.function?.name || tool?.name)
+    .filter(Boolean)
+    .join(", ");
+  const lines = [
+    "Reminder: to act, respond with EXACTLY ONE JSON tool call and nothing else:",
+    '{"tool":"tool_name","args":{}}',
+    names ? `Available tools: ${names}` : "",
+    "One tool per response. If the task is fully complete, answer normally instead.",
+  ];
+  if (agentic) {
+    // The full chunked-write protocol is only injected on turn 1 (see
+    // buildPromptForSession). On delta turns it has decayed out of focus, so
+    // re-state the one rule that actually breaks things: a single oversized
+    // Write gets truncated mid-output and the whole tool call fails.
+    lines.push(
+      "For file writes/edits, put the content in the XML form so it stays raw (no JSON escaping): <tool_call name=\"WRITE_TOOL\"><parameter name=\"file_path\">PATH</parameter><parameter name=\"content\">...raw content...</parameter></tool_call>",
+      "For any file over ~300 lines, do NOT inline the whole file in one write — oversized writes get truncated mid-output and the call fails. Write the first ~250-line chunk, then append the rest with follow-up edits in later turns.",
+    );
+  }
+  return lines.filter(Boolean).join("\n");
+}
+
+// Build a DELTA prompt for a reused DeepSeek session: send only what is new
+// since the last turn (tool results, new user input). Assistant turns are
+// skipped — DeepSeek already holds its own prior outputs in the session, so
+// re-sending them just doubles the history and dilutes the instructions.
+export function buildDeepSeekDeltaPrompt(deltaMessages = [], body = {}, { agentic = false } = {}) {
+  const parts = [];
+  for (const message of deltaMessages) {
+    const role = message.role === "developer" ? "system" : message.role;
+    if (role === "assistant") continue;
+
+    const text = contentToText(message.content).trim();
+    if (role === "tool") {
+      const truncated = text.length > DELTA_TOOL_RESULT_MAX ? text.slice(0, DELTA_TOOL_RESULT_MAX) + "...(truncated)" : text;
+      parts.push(`tool ${message.name || message.tool_call_id || "result"}: ${truncated}`);
+    } else if (role === "user") {
+      if (text) parts.push(`user: ${text}`);
+    } else if (role === "system") {
+      if (text) parts.push(text);
+    }
+  }
+
+  const sections = [];
+  if (parts.length) sections.push(parts.join("\n"));
+  const reminder = buildToolReminder(body, { agentic });
+  if (reminder) sections.push(reminder);
+  return sections.join("\n\n");
+}
+
+export function buildDeepSeekPrompt(body = {}, { agentic = false } = {}) {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const instructionParts = [];
   const historyParts = [];
@@ -190,7 +306,7 @@ export function buildDeepSeekPrompt(body = {}) {
     } else if (role === "assistant") {
       historyParts.push(`assistant: ${text}`);
     } else if (role === "tool") {
-      const truncated = text.length > 800 ? text.slice(0, 800) + "...(truncated)" : text;
+      const truncated = text.length > HISTORY_TOOL_RESULT_MAX ? text.slice(0, HISTORY_TOOL_RESULT_MAX) + "...(truncated)" : text;
       historyParts.push(`tool ${message.name || message.tool_call_id || "result"}: ${truncated}`);
     }
   }
@@ -202,11 +318,46 @@ export function buildDeepSeekPrompt(body = {}) {
   const sections = [];
   const toolText = formatTools(body.tools);
   if (instructionParts.length || toolText) {
-    sections.push(`Instructions:\n${[...instructionParts, toolText].filter(Boolean).join("\n\n")}`);
+    // Cap the client system prompt. Claude Code (and similar agents) send a
+    // ~50k-char system prompt (agent rules + every tool description) that we
+    // would otherwise carry untruncated into EVERY full prompt, so each fresh
+    // session/rotation started near saturation. The agentic chunked-write rules
+    // we prepend sit first (kept), tool definitions are re-provided by toolText,
+    // so the model still has what it needs.
+    let instr = instructionParts.filter(Boolean).join("\n\n");
+    if (instr.length > MAX_INSTRUCTIONS_CHARS) instr = instr.slice(0, MAX_INSTRUCTIONS_CHARS) + "\n...(instructions truncated)";
+    sections.push(`Instructions:\n${[instr, toolText].filter(Boolean).join("\n\n")}`);
   }
-  if (historyParts.length) sections.push(`Conversation so far:\n${historyParts.join("\n")}`);
+  if (historyParts.length) {
+    // Bound the resend: on a very long session keep only the most recent turns
+    // so a fresh-session full prompt stays well under the context limit.
+    const kept = historyParts.length > MAX_HISTORY_PARTS
+      ? ["(earlier turns omitted to bound size)", ...historyParts.slice(-MAX_HISTORY_PARTS)]
+      : historyParts;
+    sections.push(`Conversation so far:\n${kept.join("\n")}`);
+  }
   sections.push(`Current user request:\n${currentUser}`);
+  const reminder = buildToolReminder(body, { agentic });
+  if (reminder) sections.push(reminder);
   return sections.join("\n\n");
+}
+
+// Pick the right prompt for this turn: a small delta for a reused session,
+// otherwise the full prompt (first contact, or empty delta fallback). The
+// `-agentic` chunked-write system prompt is injected only on the full path —
+// reused sessions already carry it from turn 1.
+function buildPromptForSession({ body, flags, reused, prevMessageCount }) {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  if (reused) {
+    const delta = messages.slice(prevMessageCount);
+    const deltaPrompt = buildDeepSeekDeltaPrompt(delta, body, { agentic: flags.agentic });
+    if (deltaPrompt.trim()) return deltaPrompt;
+  }
+  let promptBody = body;
+  if (flags.agentic) {
+    promptBody = { ...body, messages: [{ role: "system", content: KIRO_AGENTIC_SYSTEM_PROMPT }, ...messages] };
+  }
+  return buildDeepSeekPrompt(promptBody, { agentic: flags.agentic });
 }
 
 function parseSseFrames(text) {
@@ -284,8 +435,8 @@ function applyDeepSeekPayload(payload, state) {
   }
 }
 
-export function parseDeepSeekSse(text) {
-  const state = {
+function createDeepSeekState() {
+  return {
     content: "",
     reasoningContent: "",
     usage: {},
@@ -296,6 +447,81 @@ export function parseDeepSeekSse(text) {
     currentFragmentIndex: null,
     fragments: [],
   };
+}
+
+function summarizeDeepSeekState(state) {
+  return {
+    content: state.content,
+    reasoningContent: state.reasoningContent,
+    usage: state.usage,
+    requestMessageId: state.requestMessageId,
+    responseMessageId: state.responseMessageId,
+    modelType: state.modelType,
+  };
+}
+
+function frameToPayload(frameText) {
+  if (!frameText) return null;
+  const dataLines = [];
+  for (const rawLine of frameText.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+  }
+  const data = dataLines.join("\n");
+  if (!data || data === "[DONE]") return null;
+  try {
+    return JSON.parse(data);
+  } catch {
+    return null;
+  }
+}
+
+// Read a DeepSeek completion stream incrementally, applying each SSE frame to
+// `state` as it arrives and invoking onPayload after each. Lets the caller emit
+// reasoning deltas live (keepalive) instead of buffering the whole response.
+async function streamDeepSeekFragments(responseBody, onPayload) {
+  const reader = responseBody.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split(/\r?\n\r?\n/);
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        const payload = frameToPayload(part);
+        if (payload) await onPayload(payload);
+      }
+    }
+    buffer += decoder.decode();
+    for (const part of buffer.split(/\r?\n\r?\n/)) {
+      const payload = frameToPayload(part);
+      if (payload) await onPayload(payload);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// Consume one completion stream, streaming THINK fragments out via onReasoning
+// as they grow, and return the same summary shape as parseDeepSeekSse.
+async function consumeCompletionStream(responseBody, onReasoning) {
+  const state = createDeepSeekState();
+  let emittedReasoningLen = 0;
+  await streamDeepSeekFragments(responseBody, (payload) => {
+    applyDeepSeekPayload(payload, state);
+    if (state.reasoningContent.length > emittedReasoningLen) {
+      onReasoning?.(state.reasoningContent.slice(emittedReasoningLen));
+      emittedReasoningLen = state.reasoningContent.length;
+    }
+  });
+  return summarizeDeepSeekState(state);
+}
+
+export function parseDeepSeekSse(text) {
+  const state = createDeepSeekState();
 
   for (const frame of parseSseFrames(text)) {
     if (!frame.data || frame.data === "[DONE]") continue;
@@ -305,14 +531,7 @@ export function parseDeepSeekSse(text) {
     }
   }
 
-  return {
-    content: state.content,
-    reasoningContent: state.reasoningContent,
-    usage: state.usage,
-    requestMessageId: state.requestMessageId,
-    responseMessageId: state.responseMessageId,
-    modelType: state.modelType,
-  };
+  return summarizeDeepSeekState(state);
 }
 
 function coerceToolValue(value) {
@@ -334,6 +553,65 @@ function parseParameterToolArgs(text) {
   return args;
 }
 
+// Common HTML/SVG element names. When a model dumps raw markup as a tool's
+// content these would otherwise be harvested as bogus arguments.
+const HTML_ELEMENT_TAGS = new Set([
+  "html", "head", "body", "title", "style", "script", "link", "meta", "base",
+  "div", "span", "p", "a", "br", "hr", "img", "picture",
+  "h1", "h2", "h3", "h4", "h5", "h6",
+  "ul", "ol", "li", "dl", "dt", "dd",
+  "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "col", "colgroup",
+  "strong", "em", "b", "i", "u", "s", "small", "sup", "sub", "mark", "code", "pre",
+  "kbd", "samp", "blockquote", "q", "cite", "abbr", "time", "del", "ins",
+  "label", "input", "button", "select", "option", "optgroup", "textarea", "form",
+  "fieldset", "legend", "datalist", "output", "progress", "meter",
+  "nav", "header", "footer", "section", "article", "main", "aside", "figure",
+  "figcaption", "details", "summary", "dialog", "menu", "address", "hgroup",
+  "svg", "path", "g", "rect", "circle", "ellipse", "line", "polyline", "polygon",
+  "text", "defs", "use", "symbol", "stop",
+  "canvas", "video", "audio", "track", "iframe", "embed", "object", "source", "area",
+  "template", "slot", "noscript",
+]);
+
+// Args given as direct child tags instead of <parameter name=...>, e.g.
+//   <tool_call name="Write"><file_path>a.html</file_path><content>...</content></tool_call>
+// Guarded so a model that dumps RAW markup inside a tool_call (no real arg tags)
+// does NOT get its HTML element tags (<title>, <h1>, <p>...) harvested as bogus
+// arguments — that produced invalid Write calls (file_path/content missing,
+// unexpected title/style/h1/... provided).
+function parseChildTagArgs(text) {
+  const source = String(text || "");
+
+  // Require a real file-op arg tag; otherwise this is almost certainly raw
+  // content, not a child-tag arg set. Returning null lets it fall through to
+  // the malformed-tool repair path instead of emitting a broken tool call.
+  if (!/<(content|file-content|file_path|file-path|path)>/i.test(source)) return null;
+
+  const args = {};
+  let scanSource = source;
+  const contentMatch = source.match(/<(content|file-content)>\s*([\s\S]*?)\s*<\/(?:content|file-content)>/i);
+  if (contentMatch) {
+    args.content = contentMatch[2];
+    scanSource = source.slice(0, contentMatch.index) + source.slice(contentMatch.index + contentMatch[0].length);
+  }
+
+  const scalarMatches = [...scanSource.matchAll(/<([a-zA-Z_][\w-]*)>\s*([^<>]*?)\s*<\/\1>/g)];
+  for (const match of scalarMatches) {
+    const key = match[1];
+    if (key === "content" || key === "file-content") continue;
+    if (key === "path" || key === "file-path") {
+      // <path> doubles as an SVG element, but here it carried a file-op value;
+      // map it before the HTML blocklist (which also lists "path").
+      if (!("file_path" in args)) args.file_path = coerceToolValue(match[2]);
+      continue;
+    }
+    if (HTML_ELEMENT_TAGS.has(key.toLowerCase())) continue; // never harvest HTML elements as args
+    if (!(key in args)) args[key] = coerceToolValue(match[2]);
+  }
+
+  return Object.keys(args).length > 0 ? args : null;
+}
+
 function parseLooseToolArgs(text) {
   try {
     return JSON.parse(text);
@@ -342,6 +620,9 @@ function parseLooseToolArgs(text) {
 
   const parameterArgs = parseParameterToolArgs(text);
   if (parameterArgs) return parameterArgs;
+
+  const childTagArgs = parseChildTagArgs(text);
+  if (childTagArgs) return childTagArgs;
 
   const inner = String(text || "").trim().replace(/^\{\s*|\s*\}$/g, "");
   const keyRe = /(^|,)\s*"([^"]+)"\s*:/g;
@@ -471,6 +752,65 @@ function parseWriteJsonWrapperArgs(text) {
   return findWriteJsonWrappers(text)[0]?.args || null;
 }
 
+// Function-call style for ANY tool, e.g. Read({"file_path":"a.txt","limit":50})
+// or Bash({"command":"ls"}). DeepSeek emits this instead of {"tool":...} on some
+// turns; without this it falls through as plain text and the agent loop stalls.
+function findFunctionStyleCalls(text) {
+  const source = String(text || "");
+  const calls = [];
+  for (const match of source.matchAll(/(?:^|[^A-Za-z0-9_.])([A-Za-z_][\w.]*)\s*\(\s*(?=\{)/g)) {
+    const name = match[1];
+    const braceIndex = match.index + match[0].length;
+    if (source[braceIndex] !== "{") continue;
+    const object = readJsonObject(source, braceIndex);
+    if (!object) continue;
+    let closeIndex = object.end;
+    while (/\s/.test(source[closeIndex] || "")) closeIndex += 1;
+    if (source[closeIndex] !== ")") continue;
+    const parsed = parseToolJsonCandidate(object.json);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+    calls.push({ name, args: unpackToolArgs(parsed) ?? parsed });
+  }
+  return calls;
+}
+
+function isToolObject(parsed) {
+  return !!parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    && (typeof parsed.tool === "string" || parsed.args != null || parsed.arguments != null);
+}
+
+// Find a tool-call JSON object embedded inside prose. DeepSeek frequently
+// ignores "respond with ONLY JSON" and writes a sentence first, then the call
+// in a fenced ```json block, e.g.:
+//   I'll use the X skill.
+//   ```json
+//   {"tool":"Skill","args":{...}}
+//   ```
+// unwrapToolText only strips a fence at the very start/end, so these slip
+// through and get misclassified as a malformed tool intent.
+function findEmbeddedToolObject(text) {
+  const source = String(text || "");
+
+  const fence = source.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) {
+    const parsed = parseToolJsonCandidate(fence[1].trim());
+    if (isToolObject(parsed)) return parsed;
+  }
+
+  let index = source.indexOf("{");
+  while (index !== -1) {
+    const object = readJsonObject(source, index);
+    if (object) {
+      const parsed = parseToolJsonCandidate(object.json);
+      if (isToolObject(parsed)) return parsed;
+      index = source.indexOf("{", object.end);
+    } else {
+      index = source.indexOf("{", index + 1);
+    }
+  }
+  return null;
+}
+
 function buildToolCall(toolName, parsed) {
   if (typeof toolName !== "string" || typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) return null;
   return {
@@ -512,16 +852,23 @@ function parseToolCallText(text) {
         ? `{"${unwrapped}`
         : unwrapped;
 
-  const parsedJson = parseToolJsonCandidate(jsonCandidate);
-  if (parsedJson) {
-    toolName = parsedJson?.tool;
+  let parsedJson = parseToolJsonCandidate(jsonCandidate);
+  if (!parsedJson) parsedJson = findEmbeddedToolObject(unwrapped);
+  if (parsedJson && (typeof parsedJson.tool === "string" || parsedJson.args != null || parsedJson.arguments != null)) {
+    toolName = parsedJson.tool;
     parsed = unpackToolArgs(parsedJson);
   } else {
-    const match = unwrapped.match(/<tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool(?:[-_]call)?>/)
-      || unwrapped.match(/^<?tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool(?:[-_]call)?>)?$/);
-    if (!match) return null;
-    toolName = match[1];
-    parsed = parseLooseToolArgs(match[2]);
+    const fnCall = findFunctionStyleCalls(unwrapped)[0];
+    if (fnCall) {
+      toolName = fnCall.name;
+      parsed = fnCall.args;
+    } else {
+      const match = unwrapped.match(/<tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool(?:[-_]call)?>/)
+        || unwrapped.match(/^<?tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool(?:[-_]call)?>)?$/);
+      if (!match) return null;
+      toolName = match[1];
+      parsed = parseLooseToolArgs(match[2]);
+    }
   }
 
   return buildToolCall(toolName, parsed);
@@ -715,33 +1062,13 @@ function buildEmptyCompletionRetryPrompt(prompt, body = {}) {
   ].filter(Boolean).join("\n");
 }
 
-function buildStreamingResponse(parsed, model, prompt) {
-  const encoder = new TextEncoder();
-  const created = Math.floor(Date.now() / 1000);
-  const id = `chatcmpl-deepseek-web-${crypto.randomUUID().slice(0, 12)}`;
-  return new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null, logprobs: null }] })));
-      const toolCalls = detectToolCalls(parsed.content);
-      if (toolCalls.length > 0) {
-        controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { tool_calls: toolCalls.map((toolCall, index) => ({ index, id: toolCall.id, type: "function", function: { name: toolCall.function.name, arguments: toolCall.function.arguments } })) }, finish_reason: null, logprobs: null }] })));
-        controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls", logprobs: null }] })));
-      } else {
-        if (parsed.reasoningContent) controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { reasoning_content: parsed.reasoningContent }, finish_reason: null, logprobs: null }] })));
-        if (parsed.content) controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content: parsed.content }, finish_reason: null, logprobs: null }] })));
-        controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "stop", logprobs: null }] })));
-      }
-      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-      controller.close();
-    },
-  });
-}
-
 export class DeepSeekWebExecutor extends BaseExecutor {
   constructor(options = {}) {
     super("deepseek-web", PROVIDERS["deepseek-web"]);
     this.solvePow = options.solvePow || defaultSolvePow;
     this.sessionTtlMs = options.sessionTtlMs || DEFAULT_SESSION_TTL_MS;
+    this.sessionRotateAfter = options.sessionRotateAfter || DEFAULT_SESSION_ROTATE_AFTER_MESSAGES;
+    this.sessionRotateBytes = options.sessionRotateBytes || SESSION_ROTATE_BYTES;
     this.sessionCache = new Map();
   }
 
@@ -759,30 +1086,28 @@ export class DeepSeekWebExecutor extends BaseExecutor {
     }
 
     const flags = mapDeepSeekModel(model, body);
-    let promptBody = body;
-    if (flags.agentic) {
-      const msgs = Array.isArray(body.messages) ? body.messages : [];
-      promptBody = { ...body, messages: [{ role: "system", content: KIRO_AGENTIC_SYSTEM_PROMPT }, ...msgs] };
-    }
-    const prompt = buildDeepSeekPrompt(promptBody);
-    if (!prompt.trim()) {
-      const errResp = new Response(JSON.stringify({ error: { message: "Empty prompt after processing", type: "invalid_request" } }), { status: 400, headers: { "Content-Type": "application/json" } });
-      return { response: errResp, url: CHAT_COMPLETION_URL, headers: {}, transformedBody: body };
-    }
-
     const baseHeaders = buildDeepSeekHeaders(credentials, { referer: `${DEEPSEEK_ORIGIN}/` });
 
     try {
-      const chatSessionId = await getChatSessionId({
+      const session = await getChatSession({
         model,
         body,
         credentials,
         headers: baseHeaders,
         signal,
         sessionTtlMs: this.sessionTtlMs,
+        sessionRotateAfter: this.sessionRotateAfter,
+        sessionRotateBytes: this.sessionRotateBytes,
         sessionCache: this.sessionCache,
       });
-      if (chatSessionId?.errorStatus) return this.errorResponse(chatSessionId.errorStatus, "DeepSeek session create failed", baseHeaders, body);
+      if (session?.errorStatus) return this.errorResponse(session.errorStatus, "DeepSeek session create failed", baseHeaders, body);
+
+      const { key: sessionCacheKey, chatSessionId, reused, prevMessageCount, parentMessageId } = session;
+      const prompt = buildPromptForSession({ body, flags, reused, prevMessageCount });
+      if (!prompt.trim()) {
+        const errResp = new Response(JSON.stringify({ error: { message: "Empty prompt after processing", type: "invalid_request" } }), { status: 400, headers: { "Content-Type": "application/json" } });
+        return { response: errResp, url: CHAT_COMPLETION_URL, headers: baseHeaders, transformedBody: body };
+      }
 
       const powResponse = await fetch(CREATE_POW_CHALLENGE_URL, { method: "POST", headers: baseHeaders, body: JSON.stringify({ target_path: CHAT_COMPLETION_PATH }), signal });
       if (!powResponse.ok) return this.errorResponse(powResponse.status, "DeepSeek PoW challenge failed", baseHeaders, body);
@@ -793,7 +1118,7 @@ export class DeepSeekWebExecutor extends BaseExecutor {
       const headers = buildDeepSeekHeaders(credentials, { powHeader, referer: `${DEEPSEEK_ORIGIN}/a/chat/s/${chatSessionId}` });
       const finalBody = {
         chat_session_id: chatSessionId,
-        parent_message_id: null,
+        parent_message_id: reused ? parentMessageId : null,
         model_type: flags.modelType,
         prompt,
         ref_file_ids: [],
@@ -802,11 +1127,24 @@ export class DeepSeekWebExecutor extends BaseExecutor {
         preempt: false,
       };
 
-      log?.info?.("DEEPSEEK-WEB", `Query to ${model}, len=${prompt.length}`);
+      log?.info?.("DEEPSEEK-WEB", `Query to ${model}, len=${prompt.length} reused=${reused}`);
       let requestBody = finalBody;
       let completionResponse = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
       if (!completionResponse.ok) return this.errorResponse(completionResponse.status, "DeepSeek completion failed", headers, requestBody);
       if (!completionResponse.body) return this.errorResponse(502, "DeepSeek returned empty response body", headers, requestBody);
+
+      if (stream) {
+        // Stream live: forward DeepSeek thinking as it arrives so the client
+        // sees bytes within ~1-2s. Buffering the whole response (incl. long
+        // thinking) before the first byte is what tripped the client's
+        // time-to-first-token timeout and caused the retry loop. Tool detection
+        // still needs the full response text, so the response phase is buffered
+        // behind a zero-width reasoning heartbeat; chaining/retries happen
+        // inside the stream (see buildLiveStream).
+        const liveStream = this.buildLiveStream({ firstResponse: completionResponse, finalBody, headers, body, model, flags, credentials, signal, sessionCacheKey, reused });
+        const response = new Response(liveStream, { status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } });
+        return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: finalBody };
+      }
 
       let parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
       if (looksLikeMalformedToolIntent(parsed.content, body)) {
@@ -826,16 +1164,162 @@ export class DeepSeekWebExecutor extends BaseExecutor {
         if (!hasDeepSeekOutput(parsed)) return this.errorResponse(502, "DeepSeek returned empty completion", headers, requestBody);
       }
 
-      const response = stream
-        ? new Response(buildStreamingResponse(parsed, model, requestBody.prompt), { status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } })
-        : new Response(JSON.stringify(buildOpenAIResponse({ model, prompt: requestBody.prompt, ...parsed })), { status: 200, headers: { "Content-Type": "application/json" } });
+      // Success: advance the chain. Only now do we record the new messageCount
+      // and chain the next turn to THIS response. Failed/retried attempts above
+      // never reach here, so their (bad) sibling messages stay off the path.
+      this.rememberSession(sessionCacheKey, body, parsed, requestBody.prompt?.length || 0, reused);
 
+      const response = new Response(JSON.stringify(buildOpenAIResponse({ model, prompt: requestBody.prompt, ...parsed })), { status: 200, headers: { "Content-Type": "application/json" } });
       return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: requestBody };
     } catch (err) {
       log?.error?.("DEEPSEEK-WEB", err.message || String(err));
       const errResp = new Response(JSON.stringify({ error: { message: `DeepSeek Web failed: ${err.message || String(err)}`, type: "upstream_error" } }), { status: 502, headers: { "Content-Type": "application/json" } });
       return { response: errResp, url: CHAT_COMPLETION_URL, headers: baseHeaders, transformedBody: body };
     }
+  }
+
+  rememberSession(key, body, parsed, promptLen = 0, reused = false) {
+    const entry = this.sessionCache.get(key);
+    if (!entry) return;
+    entry.messageCount = getMessageCount(body);
+    // Only DELTA turns count toward the rotation budget. A full prompt (new
+    // session / rotation / fresh-retry) is the per-session baseline, not
+    // accumulation — counting it would make a single 60k+ full prompt blow a
+    // small budget and force rotation on EVERY turn (deltas never used).
+    entry.bytesOnSession = reused ? (entry.bytesOnSession ?? 0) + (promptLen || 0) : 0;
+    entry.updatedAt = Date.now();
+    if (parsed?.responseMessageId != null) entry.parentMessageId = parsed.responseMessageId;
+  }
+
+  async getPowHeaders(credentials, chatSessionId, signal) {
+    const baseHeaders = buildDeepSeekHeaders(credentials, { referer: `${DEEPSEEK_ORIGIN}/` });
+    const powResponse = await fetch(CREATE_POW_CHALLENGE_URL, { method: "POST", headers: baseHeaders, body: JSON.stringify({ target_path: CHAT_COMPLETION_PATH }), signal });
+    if (!powResponse.ok) throw new Error(`DeepSeek PoW challenge failed (${powResponse.status})`);
+    const powData = await parseJsonResponse(powResponse, "DeepSeek PoW challenge");
+    const answer = await this.solvePow(powData.challenge);
+    const powHeader = buildPowHeaderValue({ ...powData.challenge, answer, target_path: CHAT_COMPLETION_PATH });
+    return buildDeepSeekHeaders(credentials, { powHeader, referer: `${DEEPSEEK_ORIGIN}/a/chat/s/${chatSessionId}` });
+  }
+
+  // Recover an empty completion by starting a fresh DeepSeek session and
+  // resending the full prompt once. Resets the upstream context that had
+  // saturated. Returns a parsed summary on success, or null (caller keeps the
+  // empty result). The cache is updated so subsequent turns delta off the new
+  // session via rememberSession in the caller.
+  async retryInFreshSession({ model, body, flags, credentials, signal, sessionCacheKey, emitReasoning }) {
+    try {
+      this.sessionCache.delete(sessionCacheKey);
+      const baseHeaders = buildDeepSeekHeaders(credentials, { referer: `${DEEPSEEK_ORIGIN}/` });
+      const session = await getChatSession({
+        model, body, credentials, headers: baseHeaders, signal,
+        sessionTtlMs: this.sessionTtlMs, sessionRotateAfter: this.sessionRotateAfter, sessionRotateBytes: this.sessionRotateBytes, sessionCache: this.sessionCache,
+      });
+      if (!session || session.errorStatus || !session.chatSessionId) return null;
+
+      const prompt = buildPromptForSession({ body, flags, reused: false, prevMessageCount: 0 });
+      if (!prompt.trim()) return null;
+
+      const headers = await this.getPowHeaders(credentials, session.chatSessionId, signal);
+      const finalBody = {
+        chat_session_id: session.chatSessionId,
+        parent_message_id: null,
+        model_type: flags.modelType,
+        prompt,
+        ref_file_ids: [],
+        thinking_enabled: flags.thinkingEnabled,
+        search_enabled: flags.searchEnabled,
+        preempt: false,
+      };
+      const resp = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(finalBody), signal });
+      if (!resp.ok || !resp.body) return null;
+      const summary = await consumeCompletionStream(resp.body, emitReasoning);
+      return hasDeepSeekOutput(summary) ? summary : null;
+    } catch {
+      return null;
+    }
+  }
+
+  buildLiveStream({ firstResponse, finalBody, headers, body, model, flags, credentials, signal, sessionCacheKey, reused }) {
+    const self = this;
+    let heartbeat = null;
+    let alive = true;
+    const stopHeartbeat = () => {
+      alive = false;
+      if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+    };
+
+    return new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        const created = Math.floor(Date.now() / 1000);
+        const id = `chatcmpl-deepseek-web-${crypto.randomUUID().slice(0, 12)}`;
+        const emit = (delta, finishReason = null) => {
+          try {
+            controller.enqueue(encoder.encode(sseChunk({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason: finishReason, logprobs: null }] })));
+          } catch {
+          }
+        };
+        const emitReasoning = (text) => { if (text) emit({ reasoning_content: text }); };
+        const done = () => {
+          try { controller.enqueue(encoder.encode("data: [DONE]\n\n")); } catch { }
+          try { controller.close(); } catch { }
+        };
+
+        emit({ role: "assistant" });
+        heartbeat = setInterval(() => { if (alive) emitReasoning(HEARTBEAT_TOKEN); }, HEARTBEAT_MS);
+
+        try {
+          let requestBody = finalBody;
+          let freshFired = false;
+          let summary = await consumeCompletionStream(firstResponse.body, emitReasoning);
+
+          if (looksLikeMalformedToolIntent(summary.content, body)) {
+            requestBody = { ...finalBody, prompt: buildToolRepairPrompt(summary.content, body) };
+            const repair = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
+            if (repair.ok && repair.body) summary = await consumeCompletionStream(repair.body, emitReasoning);
+          }
+
+          if (!hasDeepSeekOutput(summary)) {
+            requestBody = { ...finalBody, prompt: buildEmptyCompletionRetryPrompt(requestBody.prompt, body) };
+            const retry = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
+            if (retry.ok && retry.body) summary = await consumeCompletionStream(retry.body, emitReasoning);
+          }
+
+          if (!hasDeepSeekOutput(summary)) {
+            // In-session retries failed — the upstream session is likely
+            // saturated (chained history grew too large). Start a brand new
+            // session and resend the full prompt once; clean context recovers
+            // the turn so the agent loop continues instead of stalling.
+            const fresh = await self.retryInFreshSession({ model, body, flags, credentials, signal, sessionCacheKey, emitReasoning });
+            if (fresh) { summary = fresh; freshFired = true; }
+          }
+
+          stopHeartbeat();
+
+          // freshFired => the success landed on a brand-new (full-prompt) session,
+          // so it is a baseline, not a delta — don't count it toward the budget.
+          if (hasDeepSeekOutput(summary)) self.rememberSession(sessionCacheKey, body, summary, requestBody.prompt?.length || 0, reused && !freshFired);
+
+          const toolCalls = detectToolCalls(summary.content);
+          if (toolCalls.length > 0) {
+            emit({ tool_calls: toolCalls.map((toolCall, index) => ({ index, id: toolCall.id, type: "function", function: { name: toolCall.function.name, arguments: toolCall.function.arguments } })) });
+            emit({}, "tool_calls");
+          } else if (summary.content) {
+            emit({ content: summary.content }, "stop");
+          } else {
+            emit({ content: "[DeepSeek Web returned an empty completion]" }, "stop");
+          }
+          done();
+        } catch (err) {
+          stopHeartbeat();
+          emit({ content: `[DeepSeek Web error: ${err?.message || String(err)}]` }, "stop");
+          done();
+        }
+      },
+      cancel() {
+        stopHeartbeat();
+      },
+    });
   }
 
   errorResponse(status, message, headers, transformedBody) {

@@ -101,8 +101,7 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, r
     const outTokens = usage?.completion_tokens ?? usage?.output_tokens ?? 0;
     const hasTools = Array.isArray(body?.tools) && body.tools.length >= 5;
     if (hasTools && outTokens > 0 && outTokens < 50) {
-      const COLORS = { yellow: "\x1b[33m", reset: "\x1b[0m" };
-      console.warn(`${COLORS.yellow}[WARN] [EMPTY-RESPONSE] ${provider?.toUpperCase()} | ${model} | out=${outTokens} tok but ${body.tools.length} tools sent — provider may not handle large tool lists. Remove this provider from tool-heavy combos.${COLORS.reset}`);
+      console.warn(`[WARN] [EMPTY-RESPONSE] ${provider?.toUpperCase()} | ${model} | out=${outTokens} tok but ${body.tools.length} tools sent — provider may not handle large tool lists. Remove this provider from tool-heavy combos.`);
     }
   };
 

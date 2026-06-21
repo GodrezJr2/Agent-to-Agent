@@ -1,4 +1,9 @@
-# v0.4.66 (2026-05-29)
+# Unreleased
+
+## Fixes
+- Anthropic-compatible providers: strip Claude Code `context_management` before forwarding to gateways that reject unknown top-level fields (#1468)
+
+# v0.4.66-fork.2 (2026-06-01)
 
 ## Features
 - Add Qoder provider: device-flow OAuth, COSY signing, WAF-bypass body encoding, live model catalog, dashboard quota tracker, 11 models (#1372)

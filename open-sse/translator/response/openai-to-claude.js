@@ -3,6 +3,7 @@ import { FORMATS } from "../formats.js";
 
 // Prefix for Claude OAuth tool names (must match request translator)
 const CLAUDE_OAUTH_TOOL_PREFIX = "proxy_";
+const CLAUDE_AGENT_TOOL_NAMES = new Set(["Agent"]);
 
 // Sanitize tool call arguments to fix bad params from non-Anthropic models
 function sanitizeToolArgs(toolName, argsJson) {
@@ -12,6 +13,7 @@ function sanitizeToolArgs(toolName, argsJson) {
       ? toolName.slice(CLAUDE_OAUTH_TOOL_PREFIX.length)
       : toolName;
     if (name === "Read") sanitizeReadArgs(args);
+    if (CLAUDE_AGENT_TOOL_NAMES.has(name)) sanitizeAgentArgs(args);
     return JSON.stringify(args);
   } catch {
     return argsJson;
@@ -31,6 +33,11 @@ function sanitizeReadArgs(args) {
   if ("pages" in args && !isValidPdfPagesArg(args.file_path, args.pages)) {
     delete args.pages;
   }
+}
+
+function sanitizeAgentArgs(args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return;
+  delete args.isolation;
 }
 
 function isValidPdfPagesArg(filePath, pages) {
