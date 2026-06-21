@@ -389,6 +389,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
   // Initialize state with combo values - key prop on parent handles reset on remount
   const [name, setName] = useState(combo?.name || "");
   const [models, setModels] = useState(combo?.models || []);
+  const [contextWindow, setContextWindow] = useState(combo?.contextWindow ? String(combo.contextWindow) : "");
   const [showModelSelect, setShowModelSelect] = useState(false);
   const [saving, setSaving] = useState(false);
   const [nameError, setNameError] = useState("");
@@ -479,7 +480,8 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
   const handleSave = async () => {
     if (!validateName(name)) return;
     setSaving(true);
-    await onSave({ name: name.trim(), models });
+    const cw = contextWindow.trim() ? parseInt(contextWindow.trim(), 10) : null;
+    await onSave({ name: name.trim(), models, contextWindow: cw });
     setSaving(false);
   };
 
@@ -504,6 +506,21 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
             />
             <p className="text-[10px] text-text-muted mt-0.5">
               Only letters, numbers, -, _ and . allowed
+            </p>
+          </div>
+
+          {/* Context Window */}
+          <div>
+            <Input
+              label="Context Window (tokens)"
+              value={contextWindow}
+              onChange={(e) => setContextWindow(e.target.value.replace(/\D/g, ""))}
+              placeholder="e.g. 1000000"
+              type="text"
+              inputMode="numeric"
+            />
+            <p className="text-[10px] text-text-muted mt-0.5">
+              Advertised to clients via /v1/models. Leave blank to use model default.
             </p>
           </div>
 
