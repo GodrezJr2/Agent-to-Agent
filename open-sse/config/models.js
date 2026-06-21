@@ -6,9 +6,7 @@ const DEFAULT_MODEL_INFO = {
   contextWindow: 200000,
 };
 
-export const MODEL_INFO = {
-  "claude-fable-5": { contextWindow: 1000000 },
-};
+export const MODEL_INFO = {};
 
 export function getModelInfo(modelId) {
   return { ...DEFAULT_MODEL_INFO, ...MODEL_INFO[modelId] };

@@ -1,57 +1,13 @@
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
-import { adjustMaxTokens } from "../helpers/maxTokensHelper.js";
+import { adjustMaxTokens } from "../formats/maxTokens.js";
+import { encodeDataUri } from "../concerns/image.js";
+import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
+import { collapseTextParts } from "../concerns/message.js";
 
-const WEB_SEARCH_TOOL_TYPES = /^web_search/;
-const CLAUDE_AGENT_TOOL_NAMES = new Set(["Agent"]);
-
-function isClaudeWebSearchTool(tool) {
-  return typeof tool?.type === "string" && WEB_SEARCH_TOOL_TYPES.test(tool.type);
-}
-
-function sanitizeClaudeAgentInput(toolName, input) {
-  if (!CLAUDE_AGENT_TOOL_NAMES.has(toolName) || !input || typeof input !== "object" || Array.isArray(input)) {
-    return input || {};
-  }
-
-  if (!("isolation" in input)) return input;
-  const { isolation, ...sanitizedInput } = input;
-  return sanitizedInput;
-}
-
-function sanitizeClaudeAgentSchema(tool) {
-  const schema = tool.input_schema || { type: "object", properties: {} };
-  if (!CLAUDE_AGENT_TOOL_NAMES.has(tool.name) || !schema || typeof schema !== "object" || Array.isArray(schema)) {
-    return schema;
-  }
-
-  const properties = schema.properties;
-  if (!properties || typeof properties !== "object" || Array.isArray(properties) || !("isolation" in properties)) {
-    return schema;
-  }
-
-  const { isolation, ...sanitizedProperties } = properties;
-  const sanitizedSchema = { ...schema, properties: sanitizedProperties };
-  if (Array.isArray(schema.required)) {
-    sanitizedSchema.required = schema.required.filter(key => key !== "isolation");
-  }
-  return sanitizedSchema;
-}
-
-function convertClaudeTool(tool) {
-  if (isClaudeWebSearchTool(tool)) {
-    const { input_schema, ...nativeTool } = tool;
-    return nativeTool;
-  }
-
-  return {
-    type: "function",
-    function: {
-      name: tool.name,
-      description: String(tool.description || ""),
-      parameters: sanitizeClaudeAgentSchema(tool)
-    }
-  };
+function stripAnthropicBillingHeader(text) {
+  if (typeof text !== "string") return "";
+  return text.replace(/^x-anthropic-billing-header:[^\n]*(?:\r?\n)?/i, "");
 }
 
 // Convert Claude request to OpenAI format
@@ -75,12 +31,12 @@ export function claudeToOpenAIRequest(model, body, stream) {
   // System message
   if (body.system) {
     const systemContent = Array.isArray(body.system)
-      ? body.system.map(s => s.text || "").join("\n")
-      : body.system;
+      ? body.system.map(s => stripAnthropicBillingHeader(s.text || "")).filter(Boolean).join("\n")
+      : stripAnthropicBillingHeader(body.system);
     
     if (systemContent) {
       result.messages.push({
-        role: "system",
+        role: ROLE.SYSTEM,
         content: systemContent
       });
     }
@@ -102,28 +58,36 @@ export function claudeToOpenAIRequest(model, body, stream) {
     }
   }
 
-  // Fix missing tool responses - OpenAI requires every tool_call to have a response
-  fixMissingToolResponses(result.messages);
+  // Fix missing tool responses - OpenAI requires every tool_call to have a response.
+  // Local variant: scans contiguous tool replies + inserts "[No response received]"
+  // (distinct from the global immediate-next check in concerns/toolCall, runs on the openai leg).
+  fixMissingToolResponsesOpenAI(result.messages);
 
   // Tools
-  const hasWebSearchTool = body.tools?.some?.(isClaudeWebSearchTool) || false;
   if (body.tools && Array.isArray(body.tools)) {
-    result.tools = body.tools.map(convertClaudeTool);
+    result.tools = body.tools.map(tool => ({
+      type: OPENAI_BLOCK.FUNCTION,
+      function: {
+        name: tool.name,
+        description: String(tool.description || ""),
+        parameters: tool.input_schema || { type: "object", properties: {} }
+      }
+    }));
   }
 
   // Tool choice
   if (body.tool_choice) {
-    result.tool_choice = convertToolChoice(body.tool_choice, hasWebSearchTool);
+    result.tool_choice = convertToolChoice(body.tool_choice);
   }
 
   return result;
 }
 
 // Fix missing tool responses - add empty responses for tool_calls without responses
-function fixMissingToolResponses(messages) {
+function fixMissingToolResponsesOpenAI(messages) {
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
-    if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
+    if (msg.role === ROLE.ASSISTANT && msg.tool_calls && msg.tool_calls.length > 0) {
       const toolCallIds = msg.tool_calls.map(tc => tc.id);
       
       // Collect all tool response IDs that IMMEDIATELY follow this assistant message
@@ -131,7 +95,7 @@ function fixMissingToolResponses(messages) {
       let insertPosition = i + 1;
       for (let j = i + 1; j < messages.length; j++) {
         const nextMsg = messages[j];
-        if (nextMsg.role === "tool" && nextMsg.tool_call_id) {
+        if (nextMsg.role === ROLE.TOOL && nextMsg.tool_call_id) {
           respondedIds.add(nextMsg.tool_call_id);
           insertPosition = j + 1;
         } else {
@@ -144,7 +108,7 @@ function fixMissingToolResponses(messages) {
       
       if (missingIds.length > 0) {
         const missingResponses = missingIds.map(id => ({
-          role: "tool",
+          role: ROLE.TOOL,
           tool_call_id: id,
           content: "[No response received]"
         }));
@@ -157,7 +121,7 @@ function fixMissingToolResponses(messages) {
 
 // Convert single Claude message - returns single message or array of messages
 function convertClaudeMessage(msg) {
-  const role = msg.role === "user" || msg.role === "tool" ? "user" : "assistant";
+  const role = msg.role === ROLE.USER || msg.role === ROLE.TOOL ? ROLE.USER : ROLE.ASSISTANT;
   
   // Simple string content
   if (typeof msg.content === "string") {
@@ -172,39 +136,39 @@ function convertClaudeMessage(msg) {
 
     for (const block of msg.content) {
       switch (block.type) {
-        case "text":
-          parts.push({ type: "text", text: block.text });
+        case CLAUDE_BLOCK.TEXT:
+          parts.push({ type: OPENAI_BLOCK.TEXT, text: block.text });
           break;
 
-        case "image":
+        case CLAUDE_BLOCK.IMAGE:
           if (block.source?.type === "base64") {
             parts.push({
-              type: "image_url",
+              type: OPENAI_BLOCK.IMAGE_URL,
               image_url: {
-                url: `data:${block.source.media_type};base64,${block.source.data}`
+                url: encodeDataUri(block.source.media_type, block.source.data)
               }
             });
           }
           break;
 
-        case "tool_use":
+        case CLAUDE_BLOCK.TOOL_USE:
           toolCalls.push({
             id: block.id,
-            type: "function",
+            type: OPENAI_BLOCK.FUNCTION,
             function: {
               name: block.name,
-              arguments: JSON.stringify(sanitizeClaudeAgentInput(block.name, block.input))
+              arguments: JSON.stringify(block.input || {})
             }
           });
           break;
 
-        case "tool_result":
+        case CLAUDE_BLOCK.TOOL_RESULT:
           let resultContent = "";
           if (typeof block.content === "string") {
             resultContent = block.content;
           } else if (Array.isArray(block.content)) {
             resultContent = block.content
-              .filter(c => c.type === "text")
+              .filter(c => c.type === CLAUDE_BLOCK.TEXT)
               .map(c => c.text)
               .join("\n") || JSON.stringify(block.content);
           } else if (block.content) {
@@ -212,7 +176,7 @@ function convertClaudeMessage(msg) {
           }
           
           toolResults.push({
-            role: "tool",
+            role: ROLE.TOOL,
             tool_call_id: block.tool_use_id,
             content: resultContent
           });
@@ -223,21 +187,16 @@ function convertClaudeMessage(msg) {
     // If has tool results, return array of tool messages
     if (toolResults.length > 0) {
       if (parts.length > 0) {
-        const textContent = parts.length === 1 && parts[0].type === "text" 
-          ? parts[0].text 
-          : parts;
-        return [...toolResults, { role: "user", content: textContent }];
+        return [...toolResults, { role: ROLE.USER, content: collapseTextParts(parts) }];
       }
       return toolResults;
     }
 
     // If has tool calls, return assistant message with tool_calls
     if (toolCalls.length > 0) {
-      const result = { role: "assistant" };
+      const result = { role: ROLE.ASSISTANT };
       if (parts.length > 0) {
-        result.content = parts.length === 1 && parts[0].type === "text" 
-          ? parts[0].text 
-          : parts;
+        result.content = collapseTextParts(parts);
       }
       result.tool_calls = toolCalls;
       return result;
@@ -247,7 +206,7 @@ function convertClaudeMessage(msg) {
     if (parts.length > 0) {
       return {
         role,
-        content: parts.length === 1 && parts[0].type === "text" ? parts[0].text : parts
+        content: collapseTextParts(parts)
       };
     }
     
@@ -261,22 +220,17 @@ function convertClaudeMessage(msg) {
 }
 
 // Convert tool choice
-function convertToolChoice(choice, hasWebSearchTool = false) {
+function convertToolChoice(choice) {
   if (!choice) return "auto";
   if (typeof choice === "string") return choice;
   
   switch (choice.type) {
     case "auto": return "auto";
     case "any": return "required";
-    case "tool":
-      if (hasWebSearchTool && choice.name === "web_search") {
-        return { type: "web_search" };
-      }
-      return { type: "function", function: { name: choice.name } };
+    case "tool": return { type: OPENAI_BLOCK.FUNCTION, function: { name: choice.name } };
     default: return "auto";
   }
 }
 
 // Register
 register(FORMATS.CLAUDE, FORMATS.OPENAI, claudeToOpenAIRequest, null);
-

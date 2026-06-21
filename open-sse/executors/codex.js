@@ -1,62 +1,41 @@
-import { createHash } from "crypto";
 import { BaseExecutor } from "./base.js";
 import { CODEX_DEFAULT_INSTRUCTIONS } from "../config/codexInstructions.js";
 import { PROVIDERS } from "../config/providers.js";
-import { normalizeResponsesInput } from "../translator/helpers/responsesApiHelper.js";
-import { fetchImageAsBase64 } from "../translator/helpers/imageHelper.js";
+import {
+  refreshProviderCredentials,
+  shouldRefreshCredentials,
+} from "../services/oauthCredentialManager.js";
+import { normalizeResponsesInput } from "../translator/formats/responsesApi.js";
+import { fetchImageAsBase64 } from "../translator/concerns/image.js";
 import { getModelUpstreamId } from "../config/providerModels.js";
-import { getConsistentMachineId } from "../../src/shared/utils/machineId.js";
 import { DEFAULT_RETRY_CONFIG, resolveRetryEntry } from "../config/runtimeConfig.js";
+import { dbg } from "../utils/debugLog.js";
+import { resolveSessionId } from "../utils/sessionManager.js";
 
+// SSE error patterns inside 200-OK body that should trigger retry as if 503
 const CODEX_SSE_OVERLOADED_PATTERNS = ["server_is_overloaded", "service_unavailable_error"];
 const CODEX_SSE_PEEK_BYTES = 4096;
 
-// In-memory map: hash(machineId + first assistant content) → { sessionId, lastUsed }
-const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
-const assistantSessionMap = new Map();
-
+// Server-generated item id prefixes that Codex /responses cannot resolve when store=false
 const SERVER_ID_PATTERN = /^(rs|fc|resp|msg)_/;
 
+// Hosted tool types that Codex/OpenAI Responses executes server-side
 const CODEX_HOSTED_TOOL_TYPES = new Set([
   "image_generation", "web_search", "web_search_preview", "file_search",
-  "computer", "computer_use_preview", "code_interpreter", "mcp", "local_shell"
+  "computer", "computer_use_preview", "code_interpreter", "mcp", "local_shell",
+  "tool_search"
 ]);
-const WEB_SEARCH_TOOL_TYPES = /^web_search/;
-const CLAUDE_WEB_SEARCH_TOOL_TYPES = /^web_search_\d{8}$/;
 
-function isCodexHostedToolType(type) {
-  return CODEX_HOSTED_TOOL_TYPES.has(type) || WEB_SEARCH_TOOL_TYPES.test(type);
-}
+// Responses-native freeform tools carry a name plus format payload and must pass through intact.
+const CODEX_PASSTHROUGH_TOOL_TYPES = new Set(["custom"]);
 
-function normalizeCodexHostedTool(tool, type) {
-  if (!WEB_SEARCH_TOOL_TYPES.test(type)) return;
-  delete tool.name;
-  delete tool.input_schema;
-
-  const allowedDomains = Array.isArray(tool.allowed_domains)
-    ? tool.allowed_domains
-      .filter(domain => typeof domain === "string" && domain.trim())
-      .map(domain => domain.trim())
-    : [];
-  if (allowedDomains.length > 0) {
-    const filters = tool.filters && typeof tool.filters === "object" && !Array.isArray(tool.filters) ? tool.filters : {};
-    tool.filters = { ...filters, allowed_domains: allowedDomains };
-  }
-
-  delete tool.allowed_domains;
-  delete tool.blocked_domains;
-  delete tool.max_uses;
-
-  if (CLAUDE_WEB_SEARCH_TOOL_TYPES.test(type)) {
-    tool.type = "web_search";
-  }
-}
-
+// Allowlist of fields accepted by Codex Responses API — anything else is stripped
 const RESPONSES_API_ALLOWLIST = new Set([
   "model", "input", "instructions", "tools", "tool_choice", "stream", "store",
   "reasoning", "service_tier", "include", "prompt_cache_key", "client_metadata"
 ]);
 
+// Convert role=system → role=developer in body.input (keeps content in cacheable prefix)
 function convertSystemToDeveloperRole(body) {
   if (!Array.isArray(body.input)) return;
   for (const item of body.input) {
@@ -66,21 +45,20 @@ function convertSystemToDeveloperRole(body) {
   }
 }
 
+// Strip server-generated item IDs (rs_/fc_/resp_/msg_) from input — avoids 404 with store=false
 function stripStoredItemReferences(body) {
   if (!Array.isArray(body.input)) return;
   body.input = body.input.filter((item) => {
     if (typeof item === "string" && SERVER_ID_PATTERN.test(item)) return false;
     if (item && typeof item === "object" && !Array.isArray(item)) {
       if (item.type === "item_reference") return false;
-      // Reasoning blobs (encrypted_content) are unusable with store=false since
-      // previous_response_id is deleted — strip them to avoid wasting context tokens
-      if (item.type === "reasoning") return false;
       if (typeof item.id === "string" && SERVER_ID_PATTERN.test(item.id)) delete item.id;
     }
     return true;
   });
 }
 
+// Flatten Chat-Completions tool shape into Responses flat format + filter unsupported tools
 function normalizeCodexTools(body) {
   if (!Array.isArray(body.tools)) return;
   const validNames = new Set();
@@ -90,115 +68,52 @@ function normalizeCodexTools(body) {
     if (type === "namespace") {
       if (Array.isArray(tool.tools)) {
         for (const st of tool.tools) {
-          const name = typeof st?.name === "string" ? st.name.trim().slice(0, 128) : "";
-          if (name) validNames.add(name);
+          const n = typeof st?.name === "string" ? st.name.trim().slice(0, 128) : "";
+          if (n) validNames.add(n);
         }
       }
       return true;
     }
     if (type !== "function") {
-      if (!type || tool.function) return false;
-      if (!isCodexHostedToolType(type)) return false;
-      normalizeCodexHostedTool(tool, type);
-      return true;
+      if (CODEX_PASSTHROUGH_TOOL_TYPES.has(type)) return true;
+      if (!type || tool.function || typeof tool.name === "string") return false;
+      return CODEX_HOSTED_TOOL_TYPES.has(type);
     }
     const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function) ? tool.function : null;
     const rawName = typeof tool.name === "string" ? tool.name : (typeof fn?.name === "string" ? fn.name : "");
     const name = rawName.trim();
     if (!name) return false;
     const description = typeof tool.description === "string" ? tool.description : (typeof fn?.description === "string" ? fn.description : "");
-    const parameters = tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters)
+    const parameters = (tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters))
       ? tool.parameters
       : (fn?.parameters && typeof fn.parameters === "object" && !Array.isArray(fn.parameters) ? fn.parameters : { type: "object", properties: {} });
-    for (const key of Object.keys(tool)) delete tool[key];
+    for (const k of Object.keys(tool)) delete tool[k];
     tool.type = "function";
     tool.name = name.slice(0, 128);
     if (description) tool.description = description;
     tool.parameters = parameters;
-    validNames.add(tool.name);
+    validNames.add(name);
     return true;
   });
+  // Drop tool_choice if it references an unknown function name
   if (body.tool_choice && typeof body.tool_choice === "object" && !Array.isArray(body.tool_choice)) {
     if (body.tool_choice.type === "function") {
-      const name = typeof body.tool_choice.name === "string" ? body.tool_choice.name.trim() : "";
-      if (!name || !validNames.has(name)) delete body.tool_choice;
+      const n = typeof body.tool_choice.name === "string" ? body.tool_choice.name.trim() : "";
+      if (!n || !validNames.has(n)) delete body.tool_choice;
     }
   }
 }
 
-// Cache machine ID at module level (resolved once)
-let cachedMachineId = null;
-getConsistentMachineId().then(id => { cachedMachineId = id; });
-
-function hashContent(text) {
-  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+// Resolve prompt-cache session id: client session → assistant-text-hash → workspaceId → connection
+function resolveCacheSessionId(body, credentials) {
+  return resolveSessionId({
+    headers: credentials?.rawHeaders,
+    body,
+    connectionId: credentials?.connectionId,
+    workspaceId: credentials?.providerSpecificData?.workspaceId,
+    scope: "codex"
+  });
 }
-
-function generateSessionId() {
-  return `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
-}
-
-// Extract text content from an input item
-function extractItemText(item) {
-  if (!item) return "";
-  if (typeof item.content === "string") return item.content;
-  if (Array.isArray(item.content)) {
-    return item.content.map(c => c.text || c.output || "").filter(Boolean).join("");
-  }
-  return "";
-}
-
-function normalizeSessionId(value) {
-  if (typeof value !== "string") return null;
-  const v = value.trim();
-  if (!v || v.length > 256) return null;
-  return v;
-}
-
-function resolveCacheSessionId(body, credentials, machineId) {
-  const fromBody =
-    normalizeSessionId(body?.prompt_cache_key) ||
-    normalizeSessionId(body?.session_id) ||
-    normalizeSessionId(body?.conversation_id);
-  if (fromBody) return fromBody;
-
-  if (Array.isArray(body?.input) && body.input.length > 0) {
-    let text = "";
-    const minLen = 50;
-    const capLen = 200;
-    for (const item of body.input) {
-      if (item?.role !== "assistant") continue;
-      const itemText = extractItemText(item);
-      if (!itemText) continue;
-      text += itemText;
-      if (text.length >= capLen) break;
-    }
-    if (text.length >= minLen) {
-      const hash = hashContent((machineId || "") + text.slice(0, capLen));
-      const entry = assistantSessionMap.get(hash);
-      if (entry) {
-        entry.lastUsed = Date.now();
-        return entry.sessionId;
-      }
-      const sessionId = generateSessionId();
-      assistantSessionMap.set(hash, { sessionId, lastUsed: Date.now() });
-      return sessionId;
-    }
-  }
-
-  const workspaceId = normalizeSessionId(credentials?.providerSpecificData?.workspaceId);
-  if (workspaceId) return workspaceId;
-
-  return machineId ? `sess_${hashContent(machineId)}` : generateSessionId();
-}
-
-// Cleanup expired entries periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of assistantSessionMap) {
-    if (now - entry.lastUsed > SESSION_TTL_MS) assistantSessionMap.delete(key);
-  }
-}, 10 * 60 * 1000);
 
 /**
  * Codex Executor - handles OpenAI Codex API (Responses API format)
@@ -217,7 +132,9 @@ export class CodexExecutor extends BaseExecutor {
   buildHeaders(credentials, stream = true) {
     const headers = super.buildHeaders(credentials, stream);
     headers["session_id"] = this._currentSessionId || credentials?.connectionId || "default";
+    // Identify client type to Codex backend (matches official codex CLI)
     if (!headers["originator"]) headers["originator"] = "codex_cli_rs";
+    // Workspace binding header — improves account scope + cache affinity
     const workspaceId = credentials?.providerSpecificData?.workspaceId;
     if (typeof workspaceId === "string" && workspaceId && !headers["chatgpt-account-id"]) {
       headers["chatgpt-account-id"] = workspaceId;
@@ -228,6 +145,15 @@ export class CodexExecutor extends BaseExecutor {
   buildUrl(model, stream, urlIndex = 0, credentials = null) {
     const base = super.buildUrl(model, stream, urlIndex, credentials);
     return this._isCompact ? `${base}/compact` : base;
+  }
+
+  async refreshCredentials(credentials, log) {
+    if (!credentials?.refreshToken) return null;
+    return refreshProviderCredentials("codex", credentials, log);
+  }
+
+  needsRefresh(credentials) {
+    return shouldRefreshCredentials("codex", credentials);
   }
 
   /**
@@ -253,8 +179,19 @@ export class CodexExecutor extends BaseExecutor {
   }
 
   async execute(args) {
-    await this.prefetchImages(args.body);
+    const imgCount = Array.isArray(args.body?.input) ? args.body.input.reduce((n, it) => n + (Array.isArray(it.content) ? it.content.filter(c => c.type === "image_url").length : 0), 0) : 0;
+    const inputLen = Array.isArray(args.body?.input) ? args.body.input.length : 0;
+    dbg("CODEX", `execute start | inputItems=${inputLen} | images=${imgCount} | sessionId=${this._currentSessionId || "pending"}`);
+    if (imgCount > 0) {
+      const t0 = Date.now();
+      await this.prefetchImages(args.body);
+      dbg("CODEX", `prefetchImages done | ${Date.now() - t0}ms`);
+    } else {
+      await this.prefetchImages(args.body);
+    }
 
+    // Retry loop for SSE-level overloaded errors (200 OK body contains event: error)
+    // Reuses 503 retry config — same semantic: upstream temporarily unavailable
     const retryConfig = { ...DEFAULT_RETRY_CONFIG, ...this.config.retry };
     const { attempts, delayMs } = resolveRetryEntry(retryConfig[503]);
     let attempt = 0;
@@ -262,6 +199,7 @@ export class CodexExecutor extends BaseExecutor {
       const result = await super.execute(args);
       const peek = await this._peekSseOverloaded(result.response);
       if (!peek.matched) {
+        // Replace body with re-assembled stream (prefix bytes already read + rest)
         if (peek.replacementBody) {
           result.response = new Response(peek.replacementBody, {
             status: result.response.status,
@@ -273,6 +211,7 @@ export class CodexExecutor extends BaseExecutor {
       }
       if (attempt >= attempts) {
         args.log?.warn?.("RETRY", `CODEX | SSE overloaded "${peek.matched}" — retries exhausted (${attempt}/${attempts})`);
+        // Out of retries → return with replacement body so client gets the error
         if (peek.replacementBody) {
           result.response = new Response(peek.replacementBody, {
             status: result.response.status,
@@ -284,11 +223,15 @@ export class CodexExecutor extends BaseExecutor {
       }
       attempt++;
       args.log?.debug?.("RETRY", `CODEX | SSE "${peek.matched}" retry ${attempt}/${attempts} after ${delayMs / 1000}s`);
-      try { await result.response.body?.cancel?.(); } catch { }
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      dbg("CODEX", `SSE overloaded "${peek.matched}" → retry ${attempt}/${attempts} in ${delayMs}ms`);
+      try { await result.response.body?.cancel?.(); } catch { /* noop */ }
+      await new Promise(r => setTimeout(r, delayMs));
     }
   }
 
+  // Peek first N bytes of SSE body to detect upstream "overloaded" errors.
+  // Returns { matched: string|null, replacementBody: ReadableStream|null }.
+  // Caller MUST use replacementBody (original body has been read).
   async _peekSseOverloaded(response) {
     if (!response || !response.ok || !response.body) return { matched: null, replacementBody: null };
     const reader = response.body.getReader();
@@ -302,17 +245,20 @@ export class CodexExecutor extends BaseExecutor {
         if (done) break;
         chunks.push(value);
         text += decoder.decode(value, { stream: true });
-        const hit = CODEX_SSE_OVERLOADED_PATTERNS.find((pattern) => text.includes(pattern));
+        const hit = CODEX_SSE_OVERLOADED_PATTERNS.find(p => text.includes(p));
         if (hit) { matched = hit; break; }
       }
-    } catch { }
+    } catch (e) {
+      dbg("CODEX", `peek read error: ${e.message}`);
+    }
     reader.releaseLock();
 
+    // Re-assemble stream: prefix chunks + remaining upstream body
     const upstream = response.body;
     let upstreamReader = null;
     const replacementBody = new ReadableStream({
       start(controller) {
-        for (const chunk of chunks) controller.enqueue(chunk);
+        for (const c of chunks) controller.enqueue(c);
         upstreamReader = upstream.getReader();
       },
       async pull(controller) {
@@ -320,10 +266,10 @@ export class CodexExecutor extends BaseExecutor {
           const { done, value } = await upstreamReader.read();
           if (done) { controller.close(); return; }
           controller.enqueue(value);
-        } catch (error) { controller.error(error); }
+        } catch (e) { controller.error(e); }
       },
       cancel(reason) {
-        try { upstreamReader?.cancel(reason); } catch { }
+        try { upstreamReader?.cancel(reason); } catch { /* noop */ }
       },
     });
     return { matched, replacementBody };
@@ -362,7 +308,7 @@ export class CodexExecutor extends BaseExecutor {
     this._isCompact = !!body._compact;
     delete body._compact;
     // Resolve conversation-stable session_id (priority: body → assistant-text → workspace → machine)
-    this._currentSessionId = resolveCacheSessionId(body, credentials, cachedMachineId);
+    this._currentSessionId = resolveCacheSessionId(body, credentials);
     // Convert string input to array format (Codex API requires input as array)
     const normalized = normalizeResponsesInput(body.input);
     if (normalized) body.input = normalized;
@@ -445,8 +391,8 @@ export class CodexExecutor extends BaseExecutor {
     delete body.previous_response_id; // store=false → backend can't resolve previous resp; avoid 404
 
     // Final allowlist filter — strip any unknown field that could trigger upstream "routing_unsupported"
-    for (const key of Object.keys(body)) {
-      if (!RESPONSES_API_ALLOWLIST.has(key)) delete body[key];
+    for (const k of Object.keys(body)) {
+      if (!RESPONSES_API_ALLOWLIST.has(k)) delete body[k];
     }
 
     return body;

@@ -9,70 +9,11 @@ import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, sav
 import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { decloakToolNames } from "../../utils/claudeCloaking.js";
 
-const CLAUDE_OAUTH_TOOL_PREFIX = "proxy_";
-
-function parseOpenAIToolInput(argsJson) {
-  try {
-    const parsed = JSON.parse(argsJson || "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function convertOpenAIFinishReason(reason) {
-  switch (reason) {
-    case "tool_calls": return "tool_use";
-    case "length": return "max_tokens";
-    case "stop": return "end_turn";
-    default: return "end_turn";
-  }
-}
-
-function openAIToClaudeMessage(responseBody) {
-  const choice = responseBody?.choices?.[0];
-  const message = choice?.message;
-  if (!message) return responseBody;
-
-  const content = [];
-  if (typeof message.content === "string" && message.content) {
-    content.push({ type: "text", text: message.content });
-  }
-  for (const toolCall of message.tool_calls || []) {
-    let toolName = toolCall.function?.name || "";
-    if (toolName.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)) toolName = toolName.slice(CLAUDE_OAUTH_TOOL_PREFIX.length);
-    content.push({
-      type: "tool_use",
-      id: toolCall.id,
-      name: toolName,
-      input: parseOpenAIToolInput(toolCall.function?.arguments),
-    });
-  }
-
-  return {
-    id: responseBody.id || `msg_${Date.now()}`,
-    type: "message",
-    role: "assistant",
-    model: responseBody.model || "unknown",
-    content,
-    stop_reason: convertOpenAIFinishReason(choice.finish_reason),
-    stop_sequence: null,
-    usage: {
-      input_tokens: responseBody.usage?.prompt_tokens || 0,
-      output_tokens: responseBody.usage?.completion_tokens || 0,
-    },
-  };
-}
-
 /**
- * Translate non-streaming response body from provider format → client format.
+ * Translate non-streaming response body from provider format → OpenAI format.
  */
 export function translateNonStreamingResponse(responseBody, targetFormat, sourceFormat) {
-  if (targetFormat === sourceFormat) return responseBody;
-  if (targetFormat === FORMATS.OPENAI) {
-    if (sourceFormat === FORMATS.CLAUDE) return openAIToClaudeMessage(responseBody);
-    return responseBody;
-  }
+  if (targetFormat === sourceFormat || targetFormat === FORMATS.OPENAI) return responseBody;
 
   // Gemini / Antigravity
   if (targetFormat === FORMATS.GEMINI || targetFormat === FORMATS.ANTIGRAVITY || targetFormat === FORMATS.GEMINI_CLI || targetFormat === FORMATS.VERTEX) {
@@ -95,6 +36,12 @@ export function translateNonStreamingResponse(responseBody, targetFormat, source
             type: "function",
             function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args || {}) }
           });
+        }
+        // Handle inline image data (from image generation models)
+        const inlineData = part.inlineData || part.inline_data;
+        if (inlineData?.data) {
+          const mimeType = inlineData.mimeType || inlineData.mime_type || "image/png";
+          textContent += `\n![image](data:${mimeType};base64,${inlineData.data})\n`;
         }
       }
     }
@@ -131,12 +78,21 @@ export function translateNonStreamingResponse(responseBody, targetFormat, source
 
   // Claude
   if (targetFormat === FORMATS.CLAUDE) {
-    if (!responseBody.content) return responseBody;
+    // Always translate a Claude-format body to OpenAI, even if `content` is
+    // missing/null (e.g. M3 with max_tokens:1 spends the budget on thinking
+    // and returns `content: null`). Returning the raw body would leave the
+    // OpenAI client without a `choices` array and surface as a UI test error.
+    // Early return if the response is already in OpenAI format (has choices array)
+    // or if it has content as a non-array value (likely a different non-Claude format).
+    // Some providers (e.g. xiaomi-tokenplan) return OpenAI-format responses even when
+    // the request was translated to Claude format — the targetFormat is Claude but the
+    // actual response is OpenAI-native and needs no further translation.
+    if (responseBody.choices || (responseBody.content && !Array.isArray(responseBody.content))) return responseBody;
 
     let textContent = "", thinkingContent = "";
     const toolCalls = [];
 
-    for (const block of responseBody.content) {
+    for (const block of (responseBody.content || [])) {
       if (block.type === "text") {
         // Strip markdown code block markers (e.g. kimi wraps JSON in ```json...```)
         const raw = block.text ?? "";
@@ -224,26 +180,39 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
     ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
     : responseBody;
 
-  if (translatedResponse?.choices) {
+  // Fix finish_reason for tool_calls: some providers return non-standard values (e.g. "other")
+  if (translatedResponse?.choices?.[0]) {
     const choice = translatedResponse.choices[0];
-    const msg = choice?.message;
+    const msg = choice.message;
     const hasToolCalls = Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0;
     if (hasToolCalls && choice.finish_reason !== "tool_calls") {
       choice.finish_reason = "tool_calls";
     }
+  }
 
-    if (!translatedResponse.object) translatedResponse.object = "chat.completion";
-    if (!translatedResponse.created) translatedResponse.created = Math.floor(Date.now() / 1000);
+  // Ensure OpenAI-required fields
+  if (!translatedResponse.object) translatedResponse.object = "chat.completion";
+  if (!translatedResponse.created) translatedResponse.created = Math.floor(Date.now() / 1000);
 
-    delete translatedResponse.prompt_filter_results;
-    for (const item of translatedResponse.choices) {
-      delete item.content_filter_results;
-      if (item?.message) delete item.message.reasoning_content;
-    }
+  // Strip Azure-specific fields
+  delete translatedResponse.prompt_filter_results;
+  if (translatedResponse?.choices) {
+    for (const choice of translatedResponse.choices) delete choice.content_filter_results;
   }
 
   if (translatedResponse?.usage) {
     translatedResponse.usage = filterUsageForFormat(addBufferToUsage(translatedResponse.usage), sourceFormat);
+  }
+
+  // Strip reasoning_content only when content is non-empty.
+  // When content is empty (e.g. thinking models that used all tokens for reasoning),
+  // reasoning_content is the only useful output and must be preserved.
+  if (translatedResponse?.choices) {
+    for (const choice of translatedResponse.choices) {
+      if (choice?.message?.reasoning_content && choice.message.content) {
+        delete choice.message.reasoning_content;
+      }
+    }
   }
 
   reqLogger.logConvertedResponse(translatedResponse);

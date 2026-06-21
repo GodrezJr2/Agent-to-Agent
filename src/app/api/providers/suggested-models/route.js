@@ -1,26 +1,7 @@
 import { NextResponse } from "next/server";
+import { FILTERS } from "./filters.js";
 
 export const dynamic = "force-dynamic";
-
-const KNOWN_FREE_OPENCODE_MODELS = ["big-" + "pic" + "kle"];
-
-const FILTERS = {
-  "openrouter-free": (models) =>
-    models
-      .filter(
-        (m) =>
-          m.pricing?.prompt === "0" &&
-          m.pricing?.completion === "0" &&
-          m.context_length >= 200000
-      )
-      .map((m) => ({ id: m.id, name: m.name, contextLength: m.context_length }))
-      .sort((a, b) => b.contextLength - a.contextLength),
-
-  "opencode-free": (models) =>
-    models
-      .filter((m) => m.id?.endsWith("-free") || KNOWN_FREE_OPENCODE_MODELS.includes(m.id))
-      .map((m) => ({ id: m.id, name: m.id })),
-};
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);

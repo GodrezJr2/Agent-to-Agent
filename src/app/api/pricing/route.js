@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getPricing, updatePricing, resetPricing, resetAllPricing } from "@/lib/localDb.js";
-import { getDefaultPricing } from "@/shared/constants/pricing.js";
+import { getDefaultPricing } from "open-sse/providers/pricing.js";
 
 /**
  * GET /api/pricing
@@ -120,7 +120,7 @@ export async function DELETE(request) {
  * GET /api/pricing/defaults
  * Get default pricing configuration
  */
-async function GET_DEFAULTS() {
+export async function GET_DEFAULTS() {
   try {
     const defaultPricing = getDefaultPricing();
     return NextResponse.json(defaultPricing);
