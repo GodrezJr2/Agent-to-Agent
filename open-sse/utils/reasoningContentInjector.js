@@ -9,10 +9,11 @@ const PROVIDER_RULES = {
   deepseek: { scope: "all" }
 };
 
-// Model-level rules: matched by predicate against model id
+// Model-level rules: matched by predicate against model id.
+// Provider filter: null = apply for all providers, or Set of provider names.
 const MODEL_RULES = [
-  { match: m => /^kimi-/i.test(m || ""), scope: "toolCalls" },
-  { match: m => /deepseek/i.test(m || ""), scope: "all" }
+  { match: m => m?.startsWith?.("kimi-"), scope: "toolCalls" },
+  { match: m => m?.startsWith?.("deepseek-"), scope: "all", providers: new Set(["deepseek", "commandcode"]) }
 ];
 
 const DEEPSEEK_V4_PRO = "deepseek-v4-pro";
@@ -70,7 +71,7 @@ function applyDeepSeekV4ProAlias({ provider, model, body }) {
 
 export function injectReasoningContent({ provider, model, body }) {
   const providerRule = PROVIDER_RULES[provider];
-  const modelRule = MODEL_RULES.find(r => r.match(model));
+  const modelRule = MODEL_RULES.find(r => r.match(model) && (!r.providers || r.providers.has(provider)));
   const rule = providerRule || modelRule;
   const nextBody = applyDeepSeekV4ProAlias({ provider, model, body });
   return applyRule(nextBody, rule);

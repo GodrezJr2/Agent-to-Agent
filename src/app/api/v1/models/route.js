@@ -151,7 +151,22 @@ function comboMatchesKinds(combo, kindFilter) {
  * Build OpenAI-format models list filtered by service kinds.
  * @param {string[]} kindFilter - List of service kinds to include (e.g. ["llm"], ["webSearch","webFetch"]).
  */
+// Build map of alias/modelId → contextWindow from static model definitions
+function buildContextWindowMap() {
+  const map = {};
+  for (const [alias, models] of Object.entries(PROVIDER_MODELS)) {
+    for (const m of models) {
+      if (m.contextWindow && m.contextWindow > 0) {
+        map[`${alias}/${m.id}`] = m.contextWindow;
+      }
+    }
+  }
+  return map;
+}
+
 export async function buildModelsList(kindFilter) {
+  const contextWindowMap = buildContextWindowMap();
+
   let connections = [];
   try {
     connections = await getProviderConnections();
@@ -223,11 +238,14 @@ export async function buildModelsList(kindFilter) {
       for (const model of providerModels) {
         if (!kindFilter.includes(modelKind(model))) continue;
         if (isDisabled(alias, model.id)) continue;
-        models.push({
+        const entry = {
           id: `${alias}/${model.id}`,
           object: "model",
           owned_by: alias,
-        });
+        };
+        const ctx = model.contextWindow || contextWindowMap[`${alias}/${model.id}`];
+        if (ctx) entry.context_length = ctx;
+        models.push(entry);
       }
     }
 
@@ -353,11 +371,14 @@ export async function buildModelsList(kindFilter) {
         if (!kindFilter.includes(kind)) continue;
         if (isDisabled(outputAlias, modelId) || isDisabled(staticAlias, modelId)) continue;
 
-        models.push({
+        const entry = {
           id: `${outputAlias}/${modelId}`,
           object: "model",
           owned_by: outputAlias,
-        });
+        };
+        const ctx = contextWindowMap[`${outputAlias}/${modelId}`] || contextWindowMap[`${staticAlias}/${modelId}`];
+        if (ctx) entry.context_length = ctx;
+        models.push(entry);
       }
 
       // Merge sub-config models (TTS / embedding) that live on AI_PROVIDERS, not PROVIDER_MODELS

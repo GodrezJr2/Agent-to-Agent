@@ -2,6 +2,10 @@
 import { STREAM_STALL_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
 
+// Keepalive interval: send SSE comments to prevent client read timeouts during silent periods (e.g. reasoning models)
+const KEEPALIVE_INTERVAL_MS = 30000;
+const KEEPALIVE_CHUNK = new TextEncoder().encode(": heartbeat\n\n");
+
 // Get HH:MM:SS timestamp
 function getTimeString() {
   return new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -106,7 +110,23 @@ export function createDisconnectAwareStream(transformStream, streamController) {
       }
 
       try {
-        const { done, value } = await reader.read();
+        // Race between chunk arrival and keepalive
+        let keepaliveTimer;
+        const keepalivePromise = new Promise((resolve) => {
+          keepaliveTimer = setTimeout(() => resolve("keepalive"), KEEPALIVE_INTERVAL_MS);
+        });
+
+        let done, value;
+        try {
+          const result = await Promise.race([reader.read().then(r => ({ type: "chunk", ...r })), keepalivePromise]);
+          if (result === "keepalive") {
+            controller.enqueue(KEEPALIVE_CHUNK);
+            return;
+          }
+          ({ done, value } = result);
+        } finally {
+          clearTimeout(keepaliveTimer);
+        }
 
         if (done) {
           streamController.handleComplete();
