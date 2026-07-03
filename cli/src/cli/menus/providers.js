@@ -77,6 +77,7 @@ const PROVIDER_MODELS = {
     { id: "grok-code-fast-1" },
   ],
   kr: [
+    { id: "claude-sonnet-5" },
     { id: "claude-sonnet-4.5" },
     { id: "claude-haiku-4.5" },
   ],
