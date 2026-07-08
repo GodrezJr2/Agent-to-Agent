@@ -1,7 +1,49 @@
 # Unreleased
 
-## Fixes
+# v0.5.20-fork.1 (2026-07-08)
+
+Synced fork engine with upstream 9router v0.5.13 → v0.5.20 (37 commits).
+
+## Security & Stability
+- Prevent non-SSE stream pipe crash: when an upstream returns an HTML/text error page instead of SSE, return a sanitized JSON error instead of piping garbage and crashing the chat router (partial of #2244)
+- Dedupe OAuth connections on (email + username) so cross-IdP accounts no longer overwrite each other (#2244)
+- MITM: generate Root CA on server startup (#2228); recover from a stale lock file on start
+- Headroom: skip unsafe Responses tool history (#2132)
+
+## Providers & Models
+- Kiro: add Claude Sonnet 5 (#2264); deliver system prompt natively, add Opus 4.5/4.7/4.8, tolerate dashed version ids (#2366); route IdC auth to regional CodeWhisperer surface (#2297); strip leaked `<thinking>` tags from the content stream (#2158)
+- NVIDIA: add new models and capabilities
+- volcengine-ark: clamp GLM-5 `max_tokens` to model output ceiling (#2428)
+- kimi: normalize `reasoning_effort` to backend enum (#2427)
+- alicode: preserve `cache_control` for DashScope providers (#2069)
+- codebuddy-cn: strip empty `tool_calls` arrays to preserve reasoning; show one-shot bonus packs as expiring, not monthly-replenishing
+- xiaomi-tokenplan: region selector, key validation, multi-connection (#2251)
+- kilocode: expose full gateway catalog in combo model picker
+- OpenCode/GLM: open a tool-call block once per index (fixes id+null-name repeat on every arg chunk)
+
+## Translator / Protocol Correctness
+- openai-responses: preserve developer instructions in conversion (#2434)
+- Claude: reconcile `max_tokens` vs thinking budget and lift per-model ceiling (#2381); drop foreign thinking signatures in passthrough
+- Claude→OpenAI: map mid-conversation system message to user
+- Antigravity: strict Anthropic content-block compliance (#2225); preserve Claude tool delta index (#2223); strip `deprecated`/`readOnly`/`writeOnly` from tool schemas
+- Gemini: normalize contents to prevent 400 invalid_argument (#2192); backfill thoughtSignature and suppress the stream-done sentinel
+- count_tokens: count structured Anthropic blocks (#2419)
+- Responses: handle `response.done` terminal events (#2142)
+- Capabilities: refine Qwen vision/video and thinking model patterns
+
+## Usage & Misc
+- Usage: track cached tokens + correct input/output/cache cost (#2209); dedupe streaming request-details log entries
+- Codex: show reset-credit expiry details
+- RTK: JS-native git-log filter (#2423)
+- i18n: add Farsi (fa) language support (#2385)
+- Tray: DPI-aware Windows context menu
+- Caveman: targeted upstream-aligned style rules
+
+## Fork
 - Anthropic-compatible providers: strip Claude Code `context_management` before forwarding to gateways that reject unknown top-level fields (#1468)
+
+## Deferred (not yet ported)
+- New providers Kimchi + ClinePass; Codex opt-in auto-ping and codex reset-credit dashboard UI; headroom dashboard-proxy (needs the token-saver page this fork does not carry)
 
 # v0.4.66-fork.2 (2026-06-01)
 
