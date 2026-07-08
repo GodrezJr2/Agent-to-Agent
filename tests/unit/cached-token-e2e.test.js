@@ -20,7 +20,16 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+  // On Windows the better-sqlite3 handle may still be open here, so rmSync
+  // throws EPERM. Cleanup is best-effort — swallow it so teardown never fails
+  // the suite (the OS reclaims the temp dir anyway).
+  if (tempDir) {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort temp cleanup */
+    }
+  }
   if (originalDataDir === undefined) delete process.env.DATA_DIR;
   else process.env.DATA_DIR = originalDataDir;
 });
