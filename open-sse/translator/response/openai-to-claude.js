@@ -9,6 +9,7 @@ import { extractReasoningText } from "../concerns/reasoning.js";
 // for arg sanitization). Current request translator emits no prefix ("") — strip
 // is then a no-op. Kept intentionally; do NOT couple to request's empty prefix.
 const CLAUDE_OAUTH_TOOL_PREFIX = "proxy_";
+const CLAUDE_AGENT_TOOL_NAMES = new Set(["Agent"]);
 
 // Sanitize tool call arguments to fix bad params from non-Anthropic models
 function sanitizeToolArgs(toolName, argsJson) {
@@ -18,10 +19,18 @@ function sanitizeToolArgs(toolName, argsJson) {
       ? toolName.slice(CLAUDE_OAUTH_TOOL_PREFIX.length)
       : toolName;
     if (name === "Read") sanitizeReadArgs(args);
+    if (CLAUDE_AGENT_TOOL_NAMES.has(name)) sanitizeAgentArgs(args);
     return JSON.stringify(args);
   } catch {
     return argsJson;
   }
+}
+
+// Claude Code's Agent tool takes an `isolation` param that only its own harness
+// implements; strip it back out of tool calls relayed from other backends.
+function sanitizeAgentArgs(args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return;
+  delete args.isolation;
 }
 
 function sanitizeReadArgs(args) {

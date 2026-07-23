@@ -34,6 +34,41 @@ const CODEX_HOSTED_TOOL_TYPES = new Set([
   "tool_search"
 ]);
 
+const WEB_SEARCH_TOOL_TYPES = /^web_search/;
+const CLAUDE_WEB_SEARCH_TOOL_TYPES = /^web_search_\d{8}$/;
+
+function isCodexHostedToolType(type) {
+  return CODEX_HOSTED_TOOL_TYPES.has(type) || WEB_SEARCH_TOOL_TYPES.test(type);
+}
+
+// Claude Code advertises web_search as a dated function-shaped tool
+// (web_search_20250305 + name/input_schema/allowed_domains). Codex only accepts
+// the bare hosted `web_search` with domain limits under `filters`.
+function normalizeCodexHostedTool(tool, type) {
+  if (!WEB_SEARCH_TOOL_TYPES.test(type)) return;
+  delete tool.name;
+  delete tool.input_schema;
+
+  const allowedDomains = Array.isArray(tool.allowed_domains)
+    ? tool.allowed_domains
+      .filter(domain => typeof domain === "string" && domain.trim())
+      .map(domain => domain.trim())
+    : [];
+  if (allowedDomains.length > 0) {
+    const filters = tool.filters && typeof tool.filters === "object" && !Array.isArray(tool.filters) ? tool.filters : {};
+    tool.filters = { ...filters, allowed_domains: allowedDomains };
+  }
+
+  delete tool.allowed_domains;
+  delete tool.blocked_domains;
+  delete tool.max_uses;
+
+  if (CLAUDE_WEB_SEARCH_TOOL_TYPES.test(type)) {
+    tool.type = "web_search";
+  }
+}
+
+
 // Responses-native freeform tools carry a name plus format payload and must pass through intact.
 const CODEX_PASSTHROUGH_TOOL_TYPES = new Set(["custom"]);
 
@@ -85,8 +120,10 @@ function normalizeCodexTools(body) {
     }
     if (type !== "function") {
       if (CODEX_PASSTHROUGH_TOOL_TYPES.has(type)) return true;
-      if (!type || tool.function || typeof tool.name === "string") return false;
-      return CODEX_HOSTED_TOOL_TYPES.has(type);
+      if (!type || tool.function) return false;
+      if (!isCodexHostedToolType(type)) return false;
+      normalizeCodexHostedTool(tool, type);
+      return true;
     }
     const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function) ? tool.function : null;
     const rawName = typeof tool.name === "string" ? tool.name : (typeof fn?.name === "string" ? fn.name : "");

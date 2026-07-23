@@ -29,7 +29,8 @@ describe("translateNonStreamingResponse", () => {
     }, FORMATS.OPENAI, FORMATS.CLAUDE);
 
     expect(translated).toEqual({
-      id: "chatcmpl-1",
+      // The OpenAI-only "chatcmpl-" prefix is stripped on the way to Claude format.
+      id: "1",
       type: "message",
       role: "assistant",
       model: "deepseek-web/expert-deepthink-search",

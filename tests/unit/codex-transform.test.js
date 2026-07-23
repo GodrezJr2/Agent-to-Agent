@@ -66,7 +66,8 @@ describe("CodexExecutor request normalization", () => {
     const headers = executor.buildHeaders(credentials, true);
 
     expect(headers.session_id).toBe("conversation-abc");
-    expect(headers.originator).toBe("codex-cli");
-    expect(headers["chatgpt-account-id"]).toBe("workspace-abc");
+    // Matches the real Codex CLI wire value (also used by the usage service and registry).
+    expect(headers.originator).toBe("codex_cli_rs");
+    expect(headers["ChatGPT-Account-ID"]).toBe("workspace-abc");
   });
 });
