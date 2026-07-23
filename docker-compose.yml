@@ -10,9 +10,23 @@ services:
     environment:
       HOSTNAME: 0.0.0.0
       DATA_DIR: /app/data
+      # Default target for the Headroom token saver. Only used once the feature
+      # is switched on under Dashboard → Token Saver; the call is fail-open, so
+      # an unreachable proxy leaves requests untouched.
+      HEADROOM_URL: http://headroom:8787
     ports:
       - "20128:20128"
     volumes:
       - ./data:/app/data
       - ./workspaces:/workspaces
     restart: unless-stopped
+    depends_on:
+      - headroom
+
+  # Headroom compression proxy. Reachable only on the compose network — it is
+  # deliberately not published to the host, since nothing outside the app calls it.
+  headroom:
+    image: ghcr.io/chopratejas/headroom:latest
+    restart: unless-stopped
+    expose:
+      - "8787"
