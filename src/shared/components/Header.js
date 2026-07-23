@@ -6,11 +6,13 @@ import Link from "next/link";
 import PropTypes from "prop-types";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import HeaderMenu from "@/shared/components/HeaderMenu";
+import HeaderLanguage from "@/shared/components/HeaderLanguage";
 import ThemeToggle from "@/shared/components/ThemeToggle";
 import DonateModal from "@/shared/components/DonateModal";
 import { useHeaderSearchStore } from "@/store/headerSearchStore";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { MEDIA_PROVIDER_KINDS, AI_PROVIDERS } from "@/shared/constants/providers";
+import { getProviderIconSrc } from "@/shared/utils/providerIcon";
 import { translate } from "@/i18n/runtime";
 
 const getPageInfo = (pathname) => {
@@ -29,7 +31,7 @@ const getPageInfo = (pathname) => {
       breadcrumbs: [
         { label: "Media Providers", href: `/dashboard/media-providers/${kindId}` },
         { label: kindConfig?.label || kindId, href: `/dashboard/media-providers/${kindId}` },
-        { label: provider?.name || providerId, image: `/providers/${providerId}.png` },
+        { label: provider?.name || providerId, image: getProviderIconSrc(providerId) },
       ],
     };
   }
@@ -61,7 +63,7 @@ const getPageInfo = (pathname) => {
           { label: "Providers", href: "/dashboard/providers" },
           {
             label: providerInfo.name,
-            image: `/providers/${providerInfo.id}.png`,
+            image: getProviderIconSrc(providerInfo.id),
           },
         ],
       };
@@ -109,6 +111,13 @@ const getPageInfo = (pathname) => {
       title: "MITM Proxy",
       description: "Intercept CLI tool traffic and route through 9Router",
       icon: "security",
+      breadcrumbs: [],
+    };
+  if (pathname.includes("/token-saver"))
+    return {
+      title: "Token Saver",
+      description: "Compress prompts and outputs to save tokens",
+      icon: "savings",
       breadcrumbs: [],
     };
   if (pathname.includes("/cli-tools"))
@@ -313,6 +322,7 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
           <span className="hidden sm:inline">Donate</span>
         </button>
         <ThemeToggle />
+        <HeaderLanguage />
         <HeaderMenu onLogout={handleLogout} />
       </div>
       <DonateModal isOpen={donateOpen} onClose={() => setDonateOpen(false)} />

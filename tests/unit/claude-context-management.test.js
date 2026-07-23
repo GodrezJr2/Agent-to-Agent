@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { prepareClaudeRequest } from "../../open-sse/translator/helpers/claudeHelper.js";
+import { prepareClaudeRequest } from "../../open-sse/translator/formats/claude.js";
 
 describe("prepareClaudeRequest context_management compatibility", () => {
   it("strips Claude Code context_management for anthropic-compatible providers", () => {

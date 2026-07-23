@@ -1,7 +1,8 @@
 import { PROVIDERS, PROVIDER_OAUTH } from "../../config/providers.js";
-import { OAUTH_ENDPOINTS, GITHUB_COPILOT } from "../../config/appConstants.js";
+import { OAUTH_ENDPOINTS, GITHUB_COPILOT, buildKimiHeaders } from "../../config/appConstants.js";
 import { proxyAwareFetch } from "../../utils/proxyFetch.js";
 import { dedupRefresh } from "./dedup.js";
+import { buildExternalIdpRefreshParams } from "../../../src/lib/oauth/kiroExternalIdp.js";
 
 let _xaiServiceSingleton = null;
 export async function refreshXaiToken(refreshToken, log) {
@@ -87,6 +88,52 @@ export async function refreshAccessToken(provider, refreshToken, credentials, lo
     });
     return null;
   }
+  }, log);
+}
+
+// CLIProxyAPI DeviceFlowClient.RefreshToken: form body (no client_secret) + X-Msh-* headers
+export async function refreshKimiToken(refreshToken, credentials, log) {
+  const config = PROVIDERS.kimi;
+  if (!config?.refreshUrl || !config?.clientId) {
+    log?.warn?.("TOKEN_REFRESH", "No Kimi refresh URL/clientId configured");
+    return null;
+  }
+  if (!refreshToken) return null;
+
+  return dedupRefresh("kimi", refreshToken, async () => {
+    try {
+      const headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+        ...buildKimiHeaders(credentials?.providerSpecificData?.deviceId),
+      };
+      const response = await fetch(config.refreshUrl, {
+        method: "POST",
+        headers,
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          client_id: config.clientId,
+        }),
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        log?.error?.("TOKEN_REFRESH", `Failed to refresh token for kimi`, {
+          status: response.status,
+          error: errorText,
+        });
+        return null;
+      }
+      const tokens = await response.json();
+      return {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token || refreshToken,
+        expiresIn: tokens.expires_in,
+      };
+    } catch (error) {
+      log?.error?.("TOKEN_REFRESH", `Error refreshing token for kimi`, { error: error.message });
+      return null;
+    }
   }, log);
 }
 
@@ -308,6 +355,49 @@ export async function refreshKiroToken(refreshToken, providerSpecificData, log, 
   const clientId = providerSpecificData?.clientId;
   const clientSecret = providerSpecificData?.clientSecret;
   const region = providerSpecificData?.region;
+
+  if (authMethod === "external_idp") {
+    let refreshRequest;
+    try {
+      refreshRequest = buildExternalIdpRefreshParams(refreshToken, providerSpecificData);
+    } catch (error) {
+      log?.warn?.("TOKEN_REFRESH", `Invalid Kiro external_idp refresh config: ${error.message}`);
+      return null;
+    }
+
+    const response = await proxyAwareFetch(refreshRequest.tokenEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: refreshRequest.body,
+    }, proxyOptions);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      log?.error?.("TOKEN_REFRESH", "Failed to refresh Kiro external_idp token", {
+        status: response.status,
+        error: errorText,
+      });
+      return null;
+    }
+
+    const tokens = await response.json();
+
+    log?.info?.("TOKEN_REFRESH", "Successfully refreshed Kiro external_idp token", {
+      hasNewAccessToken: !!tokens.access_token,
+      hasNewRefreshToken: !!tokens.refresh_token,
+      expiresIn: tokens.expires_in,
+    });
+
+    return {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token || refreshToken,
+      expiresIn: tokens.expires_in,
+      providerSpecificData: refreshRequest.providerSpecificData,
+    };
+  }
 
   if (clientId && clientSecret) {
     const isIDC = authMethod === "idc";
