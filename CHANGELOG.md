@@ -1,5 +1,27 @@
 # Unreleased
 
+# v0.5.40-fork.1 (2026-07-23)
+
+Synced fork engine with upstream 9router v0.5.20 → v0.5.40 (312 commits, 751 files).
+
+## Fork surfaces preserved
+- A2A protocol routes and repos, agent card endpoint, and agent tools are byte-identical to pre-merge.
+- Agent-to-Agent Office README and the `/office` sidebar entry kept as-is.
+- `docker-compose.yml` keeps the local build + workspaces volume (upstream's image/headroom compose was not adopted).
+- Windows EPERM-tolerant teardown retained in `cached-token-e2e`.
+
+## Restored after upstream refactors dropped them
+- **DeepSeek Web** provider — upstream replaced the hardcoded provider maps with a registry-derived build, which dropped this fork-only entry. Re-added as a proper registry entry (its executor had survived).
+- **Claude Code tool sanitization for Codex** — Agent `isolation` is again stripped from the advertised schema and from emitted/relayed call args, and Claude's dated `web_search` tool passes through natively.
+
+## Adopted from upstream
+- Kimi: OAuth merged into a dual-auth provider with K3/K2.7 models; the former `kimi-coding` id survives via aliases.
+- GPT-5.6 family (Sol/Terra/Luna) across Codex and Kiro, plus corrected GPT-5 pricing.
+- xAI Grok Imagine video generation, Grok CLI/Build subscription support.
+- Kiro external-IDP auth, effort-level mapping, and session/continuation handling.
+- `getClientIp` no longer trusts client-supplied `X-Forwarded-For` (uses the socket-derived real IP, or XFF only when `TRUST_PROXY=true`).
+- Khmer locale; Farsi merged as upstream's full set plus the fork's extra keys.
+
 # v0.5.20-fork.1 (2026-07-08)
 
 Synced fork engine with upstream 9router v0.5.13 → v0.5.20 (37 commits).
