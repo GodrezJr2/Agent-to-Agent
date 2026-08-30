@@ -24,14 +24,40 @@ describe("loginLimiter", () => {
   });
 
   it("prefers the socket-derived real IP set by custom-server", () => {
-    const request = {
-      headers: new Headers({
-        "x-9r-real-ip": "203.0.113.9",
-        "x-forwarded-for": "198.51.100.7, 10.0.0.2",
-      }),
-    };
+    // custom-server.js proves the socket stamp by echoing the per-process peer token.
+    const prev = process.env.NINEROUTER_PEER_TOKEN;
+    process.env.NINEROUTER_PEER_TOKEN = "test-peer-token";
+    try {
+      const request = {
+        headers: new Headers({
+          "x-9r-real-ip": "203.0.113.9",
+          "x-9r-peer-token": "test-peer-token",
+          "x-forwarded-for": "198.51.100.7, 10.0.0.2",
+        }),
+      };
 
-    expect(getClientIp(request)).toBe("203.0.113.9");
+      expect(getClientIp(request)).toBe("203.0.113.9");
+    } finally {
+      if (prev === undefined) delete process.env.NINEROUTER_PEER_TOKEN;
+      else process.env.NINEROUTER_PEER_TOKEN = prev;
+    }
+  });
+
+  it("rejects x-9r-real-ip without the peer-token proof (GHSA-pjm4-8fpg-f9p6)", () => {
+    // A client can send x-9r-real-ip but cannot guess the per-process secret,
+    // so the header alone must not be trusted.
+    const prev = process.env.NINEROUTER_PEER_TOKEN;
+    process.env.NINEROUTER_PEER_TOKEN = "test-peer-token";
+    try {
+      const request = {
+        headers: new Headers({ "x-9r-real-ip": "203.0.113.9" }),
+      };
+
+      expect(getClientIp(request)).toBe("unknown");
+    } finally {
+      if (prev === undefined) delete process.env.NINEROUTER_PEER_TOKEN;
+      else process.env.NINEROUTER_PEER_TOKEN = prev;
+    }
   });
 
   it("ignores client-supplied x-forwarded-for when not behind a trusted proxy", () => {

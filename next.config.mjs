@@ -16,13 +16,14 @@ const nextConfig = {
   },
   distDir: process.env.NEXT_DIST_DIR || ".next",
   output: "standalone",
-  experimental: {
-    // Default 10MB Next.js body limit is too low for long agentic sessions
-    // (many tool call results + conversation history can exceed 10MB).
-    // Configurable via env var; defaults to 128MB. Closes #1529 #1572.
-    proxyClientMaxBodySize: process.env.NEXT_MAX_BODY_SIZE || "128mb"
-  },
-  serverExternalPackages: ["better-sqlite3", "sql.js", "node:sqlite", "bun:sqlite"],
+  // `open` must stay external. It derives its own directory from `import.meta.url`, and
+  // webpack replaces that with the absolute path of the BUILD machine as a string literal.
+  // A release built on macOS therefore ships `file:///Users/.../open/index.js`, which
+  // `fileURLToPath` rejects on Windows ("File URL path must be absolute" — no drive
+  // letter). That throw happens at module scope, so every consumer of `open` dies on
+  // import — including xAI/Grok token refresh, which loads the OAuth service that imports
+  // it. Keeping it external preserves the real `import.meta.url` at runtime.
+  serverExternalPackages: ["better-sqlite3", "sql.js", "node:sqlite", "bun:sqlite", "open"],
   turbopack: {
     root: tracingRoot
   },
