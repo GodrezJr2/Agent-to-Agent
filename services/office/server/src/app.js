@@ -151,6 +151,7 @@ export function createApp({ db, gateway = createGateway(), apiKey = config.apiKe
     const o = db.getOffice(req.params.id);
     if (!o) return res.status(404).json({ error: "Office not found" });
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+    res.write(": connected\n\n"); // flush headers now so EventSource reports open
     const send = (evt) => res.write(`event: ${evt.type}\ndata: ${JSON.stringify(evt.data)}\n\n`);
     for (const a of hub.currentActivity(o.id)) send({ type: "activity", data: a });
     const unsubscribe = hub.subscribe(o.id, send);

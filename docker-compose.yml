@@ -40,3 +40,20 @@ services:
     restart: unless-stopped
     expose:
       - "8790"
+
+  # A2A Office (services/office): A2A v1 agents that think through 9router.
+  # Set OFFICE_API_KEY and GATEWAY_API_KEY (a 9router API key) in office.env.
+  office:
+    build:
+      context: ./services/office
+    env_file:
+      - office.env
+    environment:
+      GATEWAY_URL: http://app:20128/v1
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./office-data:/app/data
+    restart: unless-stopped
+    depends_on:
+      - app
