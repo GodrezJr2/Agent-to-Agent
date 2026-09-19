@@ -123,9 +123,6 @@ import p119 from "./selfhosted-embedding.js";
 import p120 from "./fish-audio.js";
 import p121 from "./alitp-intl.js";
 import p122 from "./xquik.js";
-// Fork-only provider (not in upstream 9Router)
-import pFork1 from "./deepseek-web.js";
-
 export default [
   p0,
   p1,
@@ -249,5 +246,4 @@ export default [
   p120,
   p121,
   p122,
-  pFork1, // deepseek-web (fork-only)
 ];
