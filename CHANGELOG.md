@@ -1,5 +1,11 @@
 # Unreleased
 
+## Split: Office and DeepSeek Web move out of the engine
+
+- New `services/office`: A2A v1 office (official `@a2a-js/sdk`), 9router as its gateway. Replaces the old in-engine `/office` page and `[A2A:Name:task]` delegation; old office data is not migrated.
+- New `services/deepseek-web`: OpenAI-compatible sidecar for chat.deepseek.com (fixes session reuse across unrelated conversations).
+- Engine: removed the old Office/A2A routes, repos, cron scheduler, pixel assets, `agentTools`, and fork migrations 002/003. Existing DBs keep the old tables until dropped, and must reset `_meta.schemaVersion` to 1 so future upstream migrations 002+ are not skipped.
+
 # v0.5.81-fork.1 (2026-09-19)
 
 Synced fork engine with upstream 9router v0.5.59 → v0.5.81 (110 commits, 273 files; upstream releases v0.5.65, v0.5.69, v0.5.75, v0.5.79, v0.5.81).
