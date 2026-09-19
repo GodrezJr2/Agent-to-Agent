@@ -1,0 +1,25 @@
+{
+  "name": "a2a-office",
+  "version": "0.1.0",
+  "description": "Agent-to-Agent Office: A2A v1 agents that think through the 9router gateway",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:server": "node --watch server/src/index.js",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build": "vite build --config web/vite.config.ts",
+    "start": "node server/src/index.js",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@a2a-js/sdk": "^1.2.0",
+    "croner": "^10.0.1",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.11"
+  }
+}
