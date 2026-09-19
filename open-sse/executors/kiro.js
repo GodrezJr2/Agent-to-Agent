@@ -419,12 +419,6 @@ export class KiroExecutor extends BaseExecutor {
           clearInterval(heartbeatTimer);
           args.signal?.removeEventListener?.("abort", forwardAbort);
         }
-
-        // No client chunk produced this frame — emit an SSE comment keepalive
-                // so the stall watchdog sees upstream activity (ignored by parser/client).
-                if (chunkIndex === enqueueCountBefore && !state.finishEmitted) {
-                  controller.enqueue(new TextEncoder().encode(": ka\n\n"));
-                }
       },
       cancel(reason) {
         open = false;

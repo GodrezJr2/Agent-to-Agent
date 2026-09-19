@@ -127,7 +127,6 @@ export class AntigravityExecutor extends BaseExecutor {
   // sessionId comes from transformRequest output; base.execute runs transformRequest before
   // buildHeaders, so we read it from instance state cached there (fallback: explicit arg).
   buildHeaders(credentials, stream = true, sessionId = null) {
-    const sid = sessionId || this._lastSessionId;
     return {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${credentials.accessToken}`,

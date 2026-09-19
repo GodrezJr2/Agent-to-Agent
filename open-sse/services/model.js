@@ -21,7 +21,6 @@ const BUILTIN_MODEL_ALIASES = {
   "grok-build": "gcli/grok-build",
 };
 
-
 /**
  * Resolve provider alias to provider ID
  */

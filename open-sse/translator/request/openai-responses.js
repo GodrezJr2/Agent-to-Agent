@@ -15,26 +15,6 @@ import {
 import { ROLE, OPENAI_BLOCK, RESPONSES_ITEM } from "../schema/index.js";
 
 const MAX_TOOL_NAME_LEN = 128;
-const WEB_SEARCH_TOOL_TYPES = /^web_search/;
-
-// web_search is a native Responses tool — it must survive the hop untouched
-// rather than being reshaped into a function tool.
-function isWebSearchTool(tool) {
-  return typeof tool?.type === "string" && WEB_SEARCH_TOOL_TYPES.test(tool.type);
-}
-
-function isWebSearchToolChoice(choice) {
-  return choice?.type === "web_search" || (choice?.type === "tool" && choice?.name === "web_search");
-}
-
-function convertToolChoiceToResponses(choice) {
-  if (!choice || typeof choice === "string") return choice;
-  if (isWebSearchToolChoice(choice)) return { type: "web_search" };
-  if (choice.type === "function" && choice.function?.name) {
-    return { type: "function", name: choice.function.name };
-  }
-  return choice;
-}
 
 /**
  * Convert OpenAI Responses API request to OpenAI Chat Completions format
@@ -205,7 +185,6 @@ export function openaiResponsesToOpenAIRequest(model, body, stream, credentials)
   if (responseTools.length > 0) {
     result.tools = responseTools
       .map(tool => {
-        if (isWebSearchTool(tool)) return tool;
         // Already in Chat Completions format: { type: "function", function: { name, ... } }
         if (tool.function) return tool;
         // Responses API function/custom tool: { type, name, description, parameters|format }.
@@ -449,7 +428,6 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
   // Convert tools format
   if (body.tools && Array.isArray(body.tools)) {
     result.tools = body.tools.map(tool => {
-      if (isWebSearchTool(tool)) return tool;
       if (tool.type === OPENAI_BLOCK.FUNCTION) {
         // Strict upstreams reject nameless/overlong tool declarations
         const name = typeof tool.function?.name === "string" ? tool.function.name.trim() : "";
@@ -464,10 +442,6 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
       }
       return tool;
     }).filter(Boolean);
-  }
-
-  if (body.tool_choice !== undefined) {
-    result.tool_choice = convertToolChoiceToResponses(body.tool_choice);
   }
 
   // Pass through other relevant fields
