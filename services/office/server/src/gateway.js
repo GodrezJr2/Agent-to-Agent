@@ -55,5 +55,52 @@ export function createGateway({ baseUrl = config.gateway.baseUrl, apiKey = confi
       const json = await request("/models");
       return (json?.data || []).map((m) => ({ id: m.id, owned_by: m.owned_by || "" }));
     },
+
+    /**
+     * What the office can use right now: reachability, key validity, models
+     * grouped by provider prefix, and combos (ids without a provider prefix).
+     */
+    async status({ defaultModel = "" } = {}) {
+      const started = Date.now();
+      try {
+        const models = await this.listModels();
+        const providers = new Map();
+        const combos = [];
+        for (const m of models) {
+          const slash = m.id.indexOf("/");
+          if (slash === -1) { combos.push(m.id); continue; }
+          const prefix = m.id.slice(0, slash);
+          if (!providers.has(prefix)) providers.set(prefix, []);
+          providers.get(prefix).push(m.id);
+        }
+        return {
+          ok: true,
+          baseUrl,
+          authenticated: !!apiKey,
+          latencyMs: Date.now() - started,
+          modelCount: models.length,
+          providers: [...providers].map(([prefix, ids]) => ({ prefix, models: ids })).sort((a, b) => b.models.length - a.models.length || a.prefix.localeCompare(b.prefix)),
+          combos: combos.sort(),
+          defaultModel,
+          defaultModelAvailable: !defaultModel || models.some((m) => m.id === defaultModel),
+        };
+      } catch (err) {
+        return {
+          ok: false, baseUrl, authenticated: !!apiKey, latencyMs: Date.now() - started, error: err.message,
+          status: err.status || 0, modelCount: 0, providers: [], combos: [], defaultModel, defaultModelAvailable: false,
+        };
+      }
+    },
+
+    /** Send a tiny prompt to a model; reports latency and the reply or error. */
+    async ping(model) {
+      const started = Date.now();
+      try {
+        const { message } = await this.chat({ model, messages: [{ role: "user", content: "Reply with the single word: ready" }] });
+        return { ok: true, model, latencyMs: Date.now() - started, reply: String(message.content || "").trim().slice(0, 200) };
+      } catch (err) {
+        return { ok: false, model, latencyMs: Date.now() - started, error: err.message };
+      }
+    },
   };
 }

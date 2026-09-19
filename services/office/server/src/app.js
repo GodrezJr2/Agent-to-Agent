@@ -12,6 +12,7 @@ import { createToolRunner, workspaceRoot, resolveInWorkspace, DEFAULT_TOOLS, TOO
 import { createAgentHost, createA2AClient, agentBaseUrl } from "./a2a.js";
 import { OfficeAgentExecutor } from "./executor.js";
 import { createOffice } from "./office.js";
+import { TEAM_TEMPLATES, applyTeamTemplate } from "./templates.js";
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -57,7 +58,7 @@ export function createApp({ db, gateway = createGateway(), apiKey = config.apiKe
   app.use("/a2a", host.router);
 
   const api = express.Router();
-  api.use(express.json({ limit: "5mb" }));
+  api.use(express.json({ limit: "10mb" }));
   const route = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).then((out) => { if (out !== undefined && !res.headersSent) res.json(out); }).catch(next);
 
   const mustOffice = (id) => db.getOffice(id) || (() => { throw httpError(404, "Office not found"); })();
@@ -67,17 +68,41 @@ export function createApp({ db, gateway = createGateway(), apiKey = config.apiKe
   api.get("/health", (_req, res) => res.json({ status: "ok", service: "a2a-office" }));
   api.get("/config", (_req, res) => res.json({ publicUrl, gateway: gateway.baseUrl, defaultModel: config.gateway.defaultModel, tools: DEFAULT_TOOLS.map((n) => ({ name: n, description: TOOL_DEFINITIONS[n].function.description })) }));
   api.get("/models", route(async () => ({ models: await gateway.listModels() })));
+  api.get("/gateway", route(() => gateway.status({ defaultModel: config.gateway.defaultModel })));
+  api.post("/gateway/test", route((req) => {
+    const model = String(req.body?.model || config.gateway.defaultModel || "").trim();
+    if (!model) throw httpError(400, "model is required");
+    return gateway.ping(model);
+  }));
+  api.get("/templates", (_req, res) => res.json({ teams: TEAM_TEMPLATES.map(({ id, name, description, agents }) => ({ id, name, description, agents: agents.map(({ name, role, reportsTo }) => ({ name, role, lead: !reportsTo })) })) }));
 
   // offices
   api.get("/offices", route(() => ({ offices: db.listOffices() })));
   api.post("/offices", route((req) => {
     const name = String(req.body?.name || "").trim();
     if (!name) throw httpError(400, "name is required");
-    return { office: db.createOffice({ name, description: String(req.body.description || "") }) };
+    const office = db.createOffice({ name, description: String(req.body.description || "") });
+    if (req.body.team) {
+      if (!TEAM_TEMPLATES.some((t) => t.id === req.body.team)) throw httpError(400, `Unknown team template: ${req.body.team}`);
+      applyTeamTemplate(db, office.id, req.body.team, { model: String(req.body.model || "") });
+    }
+    if (req.body.layout) db.saveLayout(office.id, { layout: req.body.layout });
+    return { office };
   }));
   api.get("/offices/:id", route((req) => {
     const o = mustOffice(req.params.id);
     return { office: o, agents: db.listAgents(o.id).map(withCard), activity: hub.currentActivity(o.id) };
+  }));
+  api.get("/offices/:id/layout", route((req) => db.getLayout(mustOffice(req.params.id).id)));
+  api.put("/offices/:id/layout", route((req) => {
+    const o = mustOffice(req.params.id);
+    const { layout, seats } = req.body || {};
+    if (layout !== undefined && layout !== null && (layout.version !== 1 || !Array.isArray(layout.tiles) || !Array.isArray(layout.furniture))) {
+      throw httpError(400, "layout must be a pixel-agents OfficeLayout (version 1)");
+    }
+    db.saveLayout(o.id, { layout, seats });
+    if (layout !== undefined) hub.changed(o.id, "layout");
+    return { saved: true };
   }));
   api.patch("/offices/:id", route((req) => ({ office: db.updateOffice(mustOffice(req.params.id).id, req.body || {}) })));
   api.delete("/offices/:id", route((req) => {

@@ -14,6 +14,8 @@ function scriptedGateway(scripts) {
     baseUrl: "http://fake-gateway/v1",
     calls,
     async listModels() { return [{ id: "fake/model", owned_by: "test" }]; },
+    async status() { return { ok: true, baseUrl: "http://fake-gateway/v1", modelCount: 1, providers: [{ prefix: "fake", models: ["fake/model"] }], combos: [], defaultModel: "", defaultModelAvailable: true }; },
+    async ping(model) { return { ok: true, model, latencyMs: 1, reply: "ready" }; },
     async chat({ model, messages, tools }) {
       const system = messages[0].content;
       const who = Object.keys(scripts).find((name) => system.includes(`You are ${name}`));
@@ -125,5 +127,35 @@ describe("office end-to-end", () => {
     const res = await api("GET", `/offices/${office.id}/files?path=${encodeURIComponent("../../")}`);
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/escapes the workspace/);
+  });
+
+  it("creates an office from a team template and persists its layout", async () => {
+    const layout = { version: 1, cols: 3, rows: 2, tiles: [0, 1, 0, 0, 1, 0], furniture: [] };
+    const { status, body: { office } } = await api("POST", "/offices", { name: "Tpl Office", team: "research-squad", model: "fake/model", layout });
+    expect(status).toBe(200);
+    const agents = (await api("GET", `/offices/${office.id}`)).body.agents;
+    expect(agents.map((a) => a.name)).toEqual(["Nadia", "Dimas", "Ayu"]);
+    const lead = agents.find((a) => a.name === "Nadia");
+    expect(agents.filter((a) => a.managerId === lead.id)).toHaveLength(2);
+    expect(agents.every((a) => a.model === "fake/model")).toBe(true);
+
+    expect((await api("GET", `/offices/${office.id}/layout`)).body.layout).toEqual(layout);
+    await api("PUT", `/offices/${office.id}/layout`, { seats: { [lead.id]: { seatId: "s1" } } });
+    const saved = (await api("GET", `/offices/${office.id}/layout`)).body;
+    expect(saved.layout).toEqual(layout);
+    expect(saved.seats[lead.id].seatId).toBe("s1");
+
+    const bad = await api("PUT", `/offices/${office.id}/layout`, { layout: { version: 2 } });
+    expect(bad.status).toBe(400);
+    expect((await api("POST", "/offices", { name: "x", team: "nope" })).status).toBe(400);
+  });
+
+  it("reports gateway status and lists templates", async () => {
+    const gw = (await api("GET", "/gateway")).body;
+    expect(gw.ok).toBe(true);
+    expect(gw.providers[0].prefix).toBe("fake");
+    expect((await api("POST", "/gateway/test", { model: "fake/model" })).body.reply).toBe("ready");
+    const teams = (await api("GET", "/templates")).body.teams;
+    expect(teams.map((t) => t.id)).toContain("web-studio");
   });
 });

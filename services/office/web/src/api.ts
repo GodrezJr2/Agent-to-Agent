@@ -36,6 +36,15 @@ export type Activity = { agentId: string; state: "working" | "thinking" | "tool"
 export type Schedule = { id: string; agentId: string; cron: string; prompt: string; enabled: number; lastRun: string | null; nextRun: string | null };
 export type FileEntry = { name: string; dir: boolean; size: number; modified: string | null };
 export type ToolInfo = { name: string; description: string };
+export type GatewayStatus = {
+  ok: boolean; baseUrl: string; authenticated: boolean; latencyMs: number; error?: string; status?: number;
+  modelCount: number; providers: { prefix: string; models: string[] }[]; combos: string[];
+  defaultModel: string; defaultModelAvailable: boolean;
+};
+export type PingResult = { ok: boolean; model: string; latencyMs: number; reply?: string; error?: string };
+export type TeamTemplate = { id: string; name: string; description: string; agents: { name: string; role: string; lead: boolean }[] };
+export type LayoutTemplate = { id: string; name: string; description: string; file: string };
+export type SavedLayout = { layout: any | null; seats: Record<string, { palette?: number; hueShift?: number; seatId?: string }> };
 
 const KEY_STORAGE = "office.apiKey";
 
@@ -65,9 +74,16 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 export const api = {
   config: () => call<{ publicUrl: string; gateway: string; defaultModel: string; tools: ToolInfo[] }>("GET", "/config"),
   models: () => call<{ models: { id: string }[] }>("GET", "/models"),
+  gateway: () => call<GatewayStatus>("GET", "/gateway"),
+  pingModel: (model: string) => call<PingResult>("POST", "/gateway/test", { model }),
+  teamTemplates: () => call<{ teams: TeamTemplate[] }>("GET", "/templates"),
+  layoutTemplates: async (): Promise<LayoutTemplate[]> => (await fetch("/assets/templates/index.json")).json(),
+  layoutTemplate: async (file: string) => (await fetch(`/assets/templates/${file}`)).json(),
+  layout: (officeId: string) => call<SavedLayout>("GET", `/offices/${officeId}/layout`),
+  saveLayout: (officeId: string, body: { layout?: any; seats?: SavedLayout["seats"] }) => call("PUT", `/offices/${officeId}/layout`, body),
 
   offices: () => call<{ offices: Office[] }>("GET", "/offices"),
-  createOffice: (name: string, description = "") => call<{ office: Office }>("POST", "/offices", { name, description }),
+  createOffice: (input: { name: string; description?: string; team?: string; model?: string; layout?: any }) => call<{ office: Office }>("POST", "/offices", input),
   office: (id: string) => call<{ office: Office; agents: Agent[]; activity: Activity[] }>("GET", `/offices/${id}`),
   updateOffice: (id: string, patch: Partial<Office>) => call<{ office: Office }>("PATCH", `/offices/${id}`, patch),
   deleteOffice: (id: string) => call("DELETE", `/offices/${id}`),

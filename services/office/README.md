@@ -16,6 +16,17 @@ all of them think through the **9router** gateway.
   @mention goes to the office lead (the first agent with no manager).
 - **Shared workspace**: every office has one folder, `WORKSPACES_DIR/<officeId>`.
   File tools and `bash` are confined to it.
+- **Pixel office + layout editor**: the canvas, characters and editor come from
+  [pixel-agents](https://github.com/pablodelucca/pixel-agents) (MIT, vendored
+  under `web/src/vendor/pixel-agents`). **Edit layout** lets you paint floors
+  and walls, place, move, rotate and recolor furniture, grow the grid, and
+  undo/redo. **Templates** swaps in a starter layout (Studio, Headquarters,
+  Blank Room). Layouts and seats are saved per office.
+- **Starter teams**: a new office can start from Web Studio, Research Squad,
+  Content Desk or Solo Agent. Each one comes with a lead and reports already wired.
+- **Gateway tab**: shows 9router status, latency, the default model, every
+  provider's models and combos, and a one-click test prompt per model. Model
+  fields everywhere pick from this list.
 - **Other tools**: `fetch_url`, `web_search` (9router `/v1/search` when
   `SEARCH_PROVIDER` is set, DuckDuckGo otherwise), `remember`/`recall`,
   `send_webhook`, and `schedule_task` (cron).

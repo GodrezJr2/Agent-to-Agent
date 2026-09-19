@@ -1,0 +1,20 @@
+[
+ {
+  "id": "studio",
+  "name": "Studio",
+  "description": "Two rooms: a work area with desks and a lounge.",
+  "file": "studio.json"
+ },
+ {
+  "id": "headquarters",
+  "name": "Headquarters",
+  "description": "A large open floor with room for a bigger team.",
+  "file": "headquarters.json"
+ },
+ {
+  "id": "blank",
+  "name": "Blank Room",
+  "description": "An empty room to furnish yourself.",
+  "file": "blank.json"
+ }
+]

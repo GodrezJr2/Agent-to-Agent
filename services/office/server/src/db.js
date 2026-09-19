@@ -98,6 +98,10 @@ export function openDb(file) {
   const db = new DatabaseSync(file);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  // Additive columns for databases created before they existed.
+  const officeCols = new Set(db.prepare("PRAGMA table_info(offices)").all().map((c) => c.name));
+  if (!officeCols.has("layout")) db.exec("ALTER TABLE offices ADD COLUMN layout TEXT");
+  if (!officeCols.has("seats")) db.exec("ALTER TABLE offices ADD COLUMN seats TEXT");
 
   const q = (sql) => db.prepare(sql);
 
@@ -106,8 +110,17 @@ export function openDb(file) {
     close: () => db.close(),
 
     // ── offices ────────────────────────────────────────────────
-    listOffices: () => q("SELECT o.*, (SELECT COUNT(*) FROM agents a WHERE a.officeId = o.id) AS agentCount FROM offices o ORDER BY createdAt").all(),
-    getOffice: (id) => q("SELECT * FROM offices WHERE id = ?").get(id) || null,
+    listOffices: () => q("SELECT o.id, o.name, o.description, o.createdAt, o.updatedAt, (SELECT COUNT(*) FROM agents a WHERE a.officeId = o.id) AS agentCount FROM offices o ORDER BY createdAt").all(),
+    getOffice: (id) => q("SELECT id, name, description, chatEpoch, createdAt, updatedAt FROM offices WHERE id = ?").get(id) || null,
+    getLayout(id) {
+      const row = q("SELECT layout, seats FROM offices WHERE id = ?").get(id);
+      if (!row) return null;
+      return { layout: row.layout ? JSON.parse(row.layout) : null, seats: row.seats ? JSON.parse(row.seats) : {} };
+    },
+    saveLayout(id, { layout, seats }) {
+      if (layout !== undefined) q("UPDATE offices SET layout = ?, updatedAt = ? WHERE id = ?").run(layout ? JSON.stringify(layout) : null, now(), id);
+      if (seats !== undefined) q("UPDATE offices SET seats = ? WHERE id = ?").run(JSON.stringify(seats || {}), id);
+    },
     createOffice({ name, description = "" }) {
       const row = { id: newId(), name, description, chatEpoch: 0, createdAt: now(), updatedAt: now() };
       q("INSERT INTO offices (id, name, description, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)").run(row.id, row.name, row.description, row.createdAt, row.updatedAt);
