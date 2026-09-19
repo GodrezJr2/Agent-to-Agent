@@ -30,3 +30,13 @@ services:
     restart: unless-stopped
     expose:
       - "8787"
+
+  # DeepSeek Web → OpenAI-compatible sidecar (services/deepseek-web). Internal
+  # only: 9router reaches it as an OpenAI-compatible provider node at
+  # http://deepseek-web:8790/v1, with each DeepSeek web token as a connection key.
+  deepseek-web:
+    build:
+      context: ./services/deepseek-web
+    restart: unless-stopped
+    expose:
+      - "8790"
