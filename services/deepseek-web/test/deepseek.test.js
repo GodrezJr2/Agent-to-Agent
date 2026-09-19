@@ -978,6 +978,67 @@ describe("DeepSeekWebExecutor stateful chaining", () => {
     expect(completionCalls[1].body.prompt).not.toContain("build landing page");
   });
 
+  it("starts a fresh session for an unrelated conversation of the same length", async () => {
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    completionQueue = [
+      { id: 100, content: "PONG" },
+      { id: 200, content: "Sunny." },
+    ];
+
+    await exec.execute({
+      model: "deepseek-web/instant",
+      body: { messages: [{ role: "user", content: "Reply with exactly: PONG" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "tok-1", connectionId: "conn-unrelated" },
+    });
+    await exec.execute({
+      model: "deepseek-web/instant",
+      body: { messages: [{ role: "user", content: "What is the weather in Jakarta?" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "tok-1", connectionId: "conn-unrelated" },
+    });
+
+    const completionCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/completion"));
+    const sessionCreates = calls.filter((call) => call.url.endsWith("/api/v0/chat_session/create"));
+    expect(sessionCreates).toHaveLength(2);
+    expect(completionCalls[1].body.parent_message_id).toBeNull();
+    expect(completionCalls[1].body.prompt).toContain("weather in Jakarta");
+  });
+
+  it("starts a fresh session when a longer conversation diverges from the cached history", async () => {
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    completionQueue = [
+      { id: 100, content: "ok" },
+      { id: 200, content: "fresh" },
+    ];
+
+    await exec.execute({
+      model: "deepseek-web/instant",
+      body: { messages: [{ role: "user", content: "topic A" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "tok-1", connectionId: "conn-diverge" },
+    });
+    await exec.execute({
+      model: "deepseek-web/instant",
+      body: {
+        messages: [
+          { role: "user", content: "topic B" },
+          { role: "assistant", content: "sure" },
+          { role: "user", content: "go on" },
+        ],
+        stream: false,
+      },
+      stream: false,
+      credentials: { apiKey: "tok-1", connectionId: "conn-diverge" },
+    });
+
+    const completionCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/completion"));
+    const sessionCreates = calls.filter((call) => call.url.endsWith("/api/v0/chat_session/create"));
+    expect(sessionCreates).toHaveLength(2);
+    expect(completionCalls[1].body.parent_message_id).toBeNull();
+    expect(completionCalls[1].body.prompt).toContain("topic B");
+  });
+
   it("keeps the same parent_message_id across an in-turn retry instead of advancing", async () => {
     const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
     completionQueue = [

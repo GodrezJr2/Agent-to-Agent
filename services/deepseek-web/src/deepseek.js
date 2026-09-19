@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import { AGENTIC_SYSTEM_PROMPT } from "./agenticPrompt.js";
 
 const DEEPSEEK_ORIGIN = "https://chat.deepseek.com";
@@ -75,6 +76,18 @@ function getMessageCount(body = {}) {
   return Array.isArray(body.messages) ? body.messages.length : 0;
 }
 
+// Identity of a conversation's first `count` messages. Only system/user turns
+// count: they come from the client verbatim, whereas assistant turns are the
+// client's re-serialisation of DeepSeek's own output and drift in shape.
+export function conversationFingerprint(messages = [], count = messages.length) {
+  const hash = createHash("sha256");
+  for (const msg of messages.slice(0, count)) {
+    if (msg?.role !== "system" && msg?.role !== "user") continue;
+    hash.update(JSON.stringify([msg.role, contentToText(msg.content)]));
+  }
+  return hash.digest("hex");
+}
+
 async function getChatSession({ model, body, credentials, headers, signal, sessionTtlMs, sessionRotateAfter, sessionRotateBytes = SESSION_ROTATE_BYTES, sessionCache }) {
   const now = Date.now();
   const key = getSessionCacheKey(model, credentials);
@@ -94,7 +107,8 @@ async function getChatSession({ model, body, credentials, headers, signal, sessi
   const withinRotateWindow = turnsOnSession < sessionRotateAfter && bytesOnSession < sessionRotateBytes;
   const canReuse = cached
     && now - cached.updatedAt < sessionTtlMs
-    && messageCount >= cached.messageCount
+    && messageCount > cached.messageCount
+    && cached.fingerprint === conversationFingerprint(body.messages, cached.messageCount)
     && withinRotateWindow;
 
   if (canReuse) {
@@ -1179,6 +1193,7 @@ export class DeepSeekWebExecutor {
     const entry = this.sessionCache.get(key);
     if (!entry) return;
     entry.messageCount = getMessageCount(body);
+    entry.fingerprint = conversationFingerprint(body.messages, entry.messageCount);
     // Only DELTA turns count toward the rotation budget. A full prompt (new
     // session / rotation / fresh-retry) is the per-session baseline, not
     // accumulation — counting it would make a single 60k+ full prompt blow a
