@@ -590,18 +590,26 @@ function coerceToolValue(value) {
   return rawValue;
 }
 
-// Tag name for a param, allowing an optional XML namespace prefix (e.g.
-// "antml:parameter", or a garbled variant DeepSeek sometimes emits when it
-// mimics Claude's own invoke/parameter tool-call convention from the
-// client's system prompt). Namespace text varies per response, so match any
-// prefix rather than a hardcoded one.
-const NS_PARAMETER_TAG = /<(?:[\w.-]+:)?parameter\s+name=["']([^"']+)["'][^>]*>\s*([\s\S]*?)\s*<\/(?:[\w.-]+:)?parameter>/g;
+// Optional prefix before a tag word, allowing either an XML-namespace colon
+// (e.g. "antml:invoke") or DeepSeek's OWN special-token style: fullwidth
+// vertical bars wrapping a (garbled) word, e.g. "<｜｜DSML｜｜ invoke ...>" —
+// confirmed via live debug logs (raw bytes: U+FF5C, not ASCII "|"). DeepSeek's
+// tokenizer uses this fullwidth-pipe convention for its own reserved tokens
+// (role markers etc.); it bleeds into its attempt to imitate Claude's
+// invoke/parameter syntax from the client's system prompt, with "antml"
+// hallucinated as something else ("DSML" seen live, but the word varies —
+// match the shape, not a hardcoded word). The pipe form has its own trailing
+// whitespace before the tag word; the colon form has none.
+const NS_PREFIX = "(?:[\\w.-]+:|[|｜]{1,2}[^\\s<>]{0,32}[|｜]{1,2}\\s+)?";
 
-// Same namespace tolerance for the call-wrapper tag itself: "tool"/"tool_call"/
+// Tag name for a param, allowing that optional prefix.
+const NS_PARAMETER_TAG = new RegExp(`<${NS_PREFIX}parameter\\s+name=["']([^"']+)["'][^>]*>\\s*([\\s\\S]*?)\\s*<\\/${NS_PREFIX}parameter>`, "g");
+
+// Same prefix tolerance for the call-wrapper tag itself: "tool"/"tool_call"/
 // "tool-call" (9router's own instructed format) or "invoke" (Claude's native
 // tool-call tag, which DeepSeek mimics when it sees a Claude Code system
-// prompt — sometimes under a garbled namespace like "DSML:invoke").
-const NS_CALL_TAG = "(?:[\\w.-]+:)?(?:tool(?:[-_]call)?|invoke)";
+// prompt).
+const NS_CALL_TAG = `${NS_PREFIX}(?:tool(?:[-_]call)?|invoke)`;
 
 function parseParameterToolArgs(text) {
   const args = {};
@@ -1159,7 +1167,7 @@ function looksLikeMalformedToolIntent(content, body = {}) {
   if (!Array.isArray(body.tools) || body.tools.length === 0) return false;
   const text = String(content || "");
   if (detectToolCalls(text, body.tools).length > 0) return false;
-  return /<\/?(?:[\w.-]+:)?(?:tool(?:[-_]call)?|invoke)\b|<(?:[\w.-]+:)?parameter\b|\btool\s*[:=]|"tool"\s*:|\bargs\s*[:=]|\barguments\s*[:=]/i.test(text);
+  return new RegExp(`<\\/?${NS_CALL_TAG}\\b|<${NS_PREFIX}parameter\\b|\\btool\\s*[:=]|"tool"\\s*:|\\bargs\\s*[:=]|\\barguments\\s*[:=]`, "i").test(text);
 }
 
 function buildToolRepairPrompt(content, body = {}) {

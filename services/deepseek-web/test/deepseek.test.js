@@ -448,6 +448,29 @@ describe("detectToolCall", () => {
     });
   });
 
+  it("turns DeepSeek's own fullwidth-pipe special-token style invoke/parameter tags into OpenAI tool calls", () => {
+    // Real-world case, captured verbatim via the DEEPSEEK-WEB-DEBUG raw-content
+    // log: DeepSeek wraps the tag word in ITS OWN special-token convention —
+    // fullwidth vertical bars (U+FF5C, not ASCII "|") around a garbled word,
+    // e.g. "<｜｜DSML｜｜ invoke name=...>" — a mashup of the reserved-token
+    // syntax its tokenizer uses (role markers etc.) and its attempt to imitate
+    // Claude's invoke/parameter tags from the client's system prompt. This
+    // left the whole thing as unparsed raw text in Claude Code. The wrapped
+    // word varies per response, so this must match the SHAPE, not "DSML".
+    const call = detectToolCall('<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name="PowerShell">\n<｜｜DSML｜｜ parameter name="command" string="true">Get-ChildItem -Force -Path "D:\\Project\\Svalte test" | Select-Object Mode,Length,Name | Format-Table -AutoSize</｜｜DSML｜｜ parameter>\n<｜｜DSML｜｜ parameter name="description" string="true">List directory contents</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "PowerShell",
+        arguments: JSON.stringify({
+          command: 'Get-ChildItem -Force -Path "D:\\Project\\Svalte test" | Select-Object Mode,Length,Name | Format-Table -AutoSize',
+          description: "List directory contents",
+        }),
+      },
+    });
+  });
+
   it("turns namespaced invoke/parameter tags (garbled DeepSeek mimicry) into OpenAI tool calls", () => {
     // Real-world case: DeepSeek emitted a garbled namespace prefix
     // ("DSML:invoke", "DSML:parameter") instead of Claude's real "antml:"
