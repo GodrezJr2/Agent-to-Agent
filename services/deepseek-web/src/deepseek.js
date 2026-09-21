@@ -557,9 +557,22 @@ function coerceToolValue(value) {
   return rawValue;
 }
 
+// Tag name for a param, allowing an optional XML namespace prefix (e.g.
+// "antml:parameter", or a garbled variant DeepSeek sometimes emits when it
+// mimics Claude's own invoke/parameter tool-call convention from the
+// client's system prompt). Namespace text varies per response, so match any
+// prefix rather than a hardcoded one.
+const NS_PARAMETER_TAG = /<(?:[\w.-]+:)?parameter\s+name=["']([^"']+)["'][^>]*>\s*([\s\S]*?)\s*<\/(?:[\w.-]+:)?parameter>/g;
+
+// Same namespace tolerance for the call-wrapper tag itself: "tool"/"tool_call"/
+// "tool-call" (9router's own instructed format) or "invoke" (Claude's native
+// tool-call tag, which DeepSeek mimics when it sees a Claude Code system
+// prompt — sometimes under a garbled namespace like "DSML:invoke").
+const NS_CALL_TAG = "(?:[\\w.-]+:)?(?:tool(?:[-_]call)?|invoke)";
+
 function parseParameterToolArgs(text) {
   const args = {};
-  const matches = [...String(text || "").matchAll(/<parameter\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/parameter>/g)];
+  const matches = [...String(text || "").matchAll(NS_PARAMETER_TAG)];
   if (matches.length === 0) return null;
   for (const match of matches) args[match[1]] = coerceToolValue(match[2]);
   return args;
@@ -875,8 +888,8 @@ function parseToolCallText(text) {
       toolName = fnCall.name;
       parsed = fnCall.args;
     } else {
-      const match = unwrapped.match(/<tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool(?:[-_]call)?>/)
-        || unwrapped.match(/^<?tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)(?:\s*<\/tool(?:[-_]call)?>)?$/);
+      const match = unwrapped.match(new RegExp(`<${NS_CALL_TAG}\\s+name=["']([^"']+)["'][^>]*>\\s*([\\s\\S]*?)\\s*<\\/${NS_CALL_TAG}>`))
+        || unwrapped.match(new RegExp(`^<?${NS_CALL_TAG}\\s+name=["']([^"']+)["'][^>]*>\\s*([\\s\\S]*?)(?:\\s*<\\/${NS_CALL_TAG}>)?$`));
       if (!match) return null;
       toolName = match[1];
       parsed = parseLooseToolArgs(match[2]);
@@ -895,7 +908,7 @@ export function detectToolCalls(text) {
       .filter(Boolean);
   }
 
-  const xmlMatches = [...unwrapped.matchAll(/<tool(?:[-_]call)?\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/tool(?:[-_]call)?>/g)];
+  const xmlMatches = [...unwrapped.matchAll(new RegExp(`<${NS_CALL_TAG}\\s+name=["']([^"']+)["'][^>]*>\\s*([\\s\\S]*?)\\s*<\\/${NS_CALL_TAG}>`, "g"))];
   if (xmlMatches.length > 1) {
     const xmlCalls = xmlMatches
       .map((match) => buildToolCall(match[1], parseLooseToolArgs(match[2])))
@@ -1045,7 +1058,7 @@ function looksLikeMalformedToolIntent(content, body = {}) {
   if (!Array.isArray(body.tools) || body.tools.length === 0) return false;
   const text = String(content || "");
   if (detectToolCalls(text).length > 0) return false;
-  return /<\/?tool(?:[-_]call)?\b|<parameter\b|<\/invoke\b|\btool\s*[:=]|"tool"\s*:|\bargs\s*[:=]|\barguments\s*[:=]/i.test(text);
+  return /<\/?(?:[\w.-]+:)?(?:tool(?:[-_]call)?|invoke)\b|<(?:[\w.-]+:)?parameter\b|\btool\s*[:=]|"tool"\s*:|\bargs\s*[:=]|\barguments\s*[:=]/i.test(text);
 }
 
 function buildToolRepairPrompt(content, body = {}) {

@@ -408,6 +408,44 @@ describe("detectToolCall", () => {
     });
   });
 
+  it("turns Claude's native <invoke>/<parameter> tags into OpenAI tool calls", () => {
+    // DeepSeek sometimes mimics Claude Code's own invoke/parameter tool-call
+    // syntax (documented in the client's system prompt) instead of the
+    // {"tool":...} / <tool_call> format 9router instructs it to use.
+    const call = detectToolCall('<invoke name="Bash">\n<parameter name="command">Get-ChildItem -Force</parameter>\n<parameter name="description">List working dir contents</parameter>\n</invoke>');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Bash",
+        arguments: JSON.stringify({
+          command: "Get-ChildItem -Force",
+          description: "List working dir contents",
+        }),
+      },
+    });
+  });
+
+  it("turns namespaced invoke/parameter tags (garbled DeepSeek mimicry) into OpenAI tool calls", () => {
+    // Real-world case: DeepSeek emitted a garbled namespace prefix
+    // ("DSML:invoke", "DSML:parameter") instead of Claude's real "antml:"
+    // namespace, and left it unparsed as raw text in Claude Code. The
+    // namespace text varies, so this must tolerate any prefix, plus the
+    // extra `string="true"` attribute DeepSeek added on <parameter>.
+    const call = detectToolCall('<DSML:invoke name="Bash">\n<DSML:parameter name="command" string="true">Get-ChildItem -Force "D:\\Project\\Svalte test" | Sort-Object LastWriteTime -Descending</DSML:parameter>\n<DSML:parameter name="description" string="true">List working dir contents</DSML:parameter>\n</DSML:invoke>');
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "Bash",
+        arguments: JSON.stringify({
+          command: 'Get-ChildItem -Force "D:\\Project\\Svalte test" | Sort-Object LastWriteTime -Descending',
+          description: "List working dir contents",
+        }),
+      },
+    });
+  });
+
   it("turns clipped flat JSON tool calls into OpenAI tool calls", () => {
     const call = detectToolCall('tool":"Read","file_path":"C:\\\\Users\\\\Administrator\\\\AppData\\\\Roaming\\\\npm\\\\claude-dsw.cmd","limit":2}}');
 
