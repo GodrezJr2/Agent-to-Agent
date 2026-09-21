@@ -1391,6 +1391,12 @@ export class DeepSeekWebExecutor {
           } else if (summary.content) {
             emit({ content: summary.content }, "stop");
           } else {
+            // TEMP DEBUG (remove once the persistent-empty-completion report is
+            // diagnosed): a truly empty completion survived repair retry, empty
+            // retry, AND a brand-new session — log what DeepSeek's own message
+            // bookkeeping says happened (did it even open a response turn? any
+            // reasoning at all?) since the content itself has nothing to show.
+            log?.info?.("DEEPSEEK-WEB-DEBUG", `Empty after all retries: ${JSON.stringify({ freshFired, requestMessageId: summary.requestMessageId, responseMessageId: summary.responseMessageId, modelType: summary.modelType, usage: summary.usage, reasoningLen: (summary.reasoningContent || "").length, reasoningPreview: (summary.reasoningContent || "").slice(0, 300) })}`);
             emit({ content: "[DeepSeek Web returned an empty completion]" }, "stop");
           }
           done();
