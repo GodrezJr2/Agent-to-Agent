@@ -740,6 +740,31 @@ describe("DeepSeekWebExecutor.execute", () => {
     expect(decodedPow.target_path).toBe("/api/v0/chat/completion");
   });
 
+  it("surfaces DeepSeek's own error message when session create returns a business-level failure", async () => {
+    // Regression: a non-zero `code`/`biz_code` on an otherwise HTTP-200 response
+    // (e.g. an expired login, region block, or rate limit) used to collapse to
+    // the bare string "DeepSeek session create failed", indistinguishable from
+    // every other cause. The upstream `msg` must reach the client/logs.
+    global.fetch = vi.fn(async (url) => {
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        return new Response(JSON.stringify({ code: 40001, msg: "login required", data: null }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    const { response } = await exec.execute({
+      model: "deepseek-web/expert-deepthink-search",
+      body: { messages: [{ role: "user", content: "hello" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "tok-1" },
+    });
+
+    expect(response.status).toBe(502);
+    const json = await response.json();
+    expect(json.error.message).toContain("login required");
+  });
+
   it("reuses one DeepSeek chat session while message history grows", async () => {
     const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
 

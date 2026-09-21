@@ -1045,7 +1045,13 @@ async function parseJsonResponse(response, label) {
   const json = await response.json().catch(() => null);
   const code = json?.code ?? 0;
   const bizCode = json?.data?.biz_code ?? 0;
-  if (!json || code !== 0 || bizCode !== 0) throw new Error(`${label} failed`);
+  if (!json || code !== 0 || bizCode !== 0) {
+    // Surface WHY DeepSeek rejected the call (expired login, region block, rate
+    // limit, ...) instead of a bare "X failed" — that string alone gave no way
+    // to tell those apart from the logs.
+    const detail = json?.msg || json?.data?.biz_msg || (json ? `code=${code} biz_code=${bizCode}` : "empty/non-JSON response body");
+    throw new Error(`${label} failed: ${detail}`);
+  }
   return json.data.biz_data;
 }
 
