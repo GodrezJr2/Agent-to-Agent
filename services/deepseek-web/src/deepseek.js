@@ -836,14 +836,53 @@ function findEmbeddedToolObject(text) {
   return null;
 }
 
-function buildToolCall(toolName, parsed) {
+// Different clients declare the same conceptual tool under different
+// argument names — Claude Code's Write tool uses file_path/content, OpenCode's
+// write tool uses path/content. DeepSeek Web has no real function-calling: its
+// output is recovered from raw text with generic, client-agnostic heuristics
+// that must pick ONE name to emit. When the connected client's own declared
+// schema wants a different name, the call parses fine but then fails the
+// client's argument validation (e.g. "path: Missing key") even though intent
+// and value were extracted correctly. Remap parsed keys to whatever the
+// client's own tool schema actually declares before returning the call.
+const ARG_SYNONYM_GROUPS = [
+  ["file_path", "path", "filePath", "file-path"],
+  ["content", "file_content", "fileContent", "text"],
+];
+
+function findToolSchema(tools, name) {
+  if (!Array.isArray(tools) || !name) return null;
+  const lower = String(name).toLowerCase();
+  return tools.find((t) => String((t?.function || t)?.name || "").toLowerCase() === lower) || null;
+}
+
+function normalizeToolCall(toolName, args, tools) {
+  const schema = findToolSchema(tools, toolName);
+  if (!schema) return { name: toolName, args };
+  const fn = schema.function || schema;
+  const properties = fn.parameters?.properties || {};
+  const propNames = Object.keys(properties);
+  if (propNames.length === 0) return { name: fn.name || toolName, args };
+
+  const normalized = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (key in properties) { normalized[key] = value; continue; }
+    const group = ARG_SYNONYM_GROUPS.find((g) => g.includes(key));
+    const target = group?.find((candidate) => candidate !== key && propNames.includes(candidate));
+    normalized[target || key] = value;
+  }
+  return { name: fn.name || toolName, args: normalized };
+}
+
+function buildToolCall(toolName, parsed, tools) {
   if (typeof toolName !== "string" || typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) return null;
+  const { name, args } = normalizeToolCall(toolName, parsed, tools);
   return {
     id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
     type: "function",
     function: {
-      name: toolName,
-      arguments: JSON.stringify(parsed),
+      name,
+      arguments: JSON.stringify(args),
     },
   };
 }
@@ -857,14 +896,14 @@ function unwrapToolText(text) {
     .trim();
 }
 
-function parseToolCallText(text) {
+function parseToolCallText(text, tools) {
   const unwrapped = unwrapToolText(text);
   const fileWriteMatch = [...unwrapped.matchAll(FILE_WRITE_RE)][0];
-  if (fileWriteMatch) return buildToolCall("Write", parseFileWriteArgs(fileWriteMatch));
+  if (fileWriteMatch) return buildToolCall("Write", parseFileWriteArgs(fileWriteMatch), tools);
   const functionStyleWriteArgs = parseFunctionStyleWriteArgs(unwrapped);
-  if (functionStyleWriteArgs) return buildToolCall("Write", functionStyleWriteArgs);
+  if (functionStyleWriteArgs) return buildToolCall("Write", functionStyleWriteArgs, tools);
   const writeJsonWrapperArgs = parseWriteJsonWrapperArgs(unwrapped);
-  if (writeJsonWrapperArgs) return buildToolCall("Write", writeJsonWrapperArgs);
+  if (writeJsonWrapperArgs) return buildToolCall("Write", writeJsonWrapperArgs, tools);
 
   let parsed;
   let toolName;
@@ -896,22 +935,22 @@ function parseToolCallText(text) {
     }
   }
 
-  return buildToolCall(toolName, parsed);
+  return buildToolCall(toolName, parsed, tools);
 }
 
-export function detectToolCalls(text) {
+export function detectToolCalls(text, tools) {
   const unwrapped = unwrapToolText(text);
   const fileWriteMatches = [...unwrapped.matchAll(FILE_WRITE_RE)];
   if (fileWriteMatches.length > 1) {
     return fileWriteMatches
-      .map((match) => buildToolCall("Write", parseFileWriteArgs(match)))
+      .map((match) => buildToolCall("Write", parseFileWriteArgs(match), tools))
       .filter(Boolean);
   }
 
   const xmlMatches = [...unwrapped.matchAll(new RegExp(`<${NS_CALL_TAG}\\s+name=["']([^"']+)["'][^>]*>\\s*([\\s\\S]*?)\\s*<\\/${NS_CALL_TAG}>`, "g"))];
   if (xmlMatches.length > 1) {
     const xmlCalls = xmlMatches
-      .map((match) => buildToolCall(match[1], parseLooseToolArgs(match[2])))
+      .map((match) => buildToolCall(match[1], parseLooseToolArgs(match[2]), tools))
       .filter(Boolean);
     const allSameName = xmlCalls.every((c) => c.function.name === xmlCalls[0].function.name);
     return allSameName ? xmlCalls : [xmlCalls[0]];
@@ -920,16 +959,16 @@ export function detectToolCalls(text) {
   const writeJsonWrappers = findWriteJsonWrappers(unwrapped);
   if (writeJsonWrappers.length > 1) {
     return writeJsonWrappers
-      .map((wrapper) => buildToolCall("Write", wrapper.args))
+      .map((wrapper) => buildToolCall("Write", wrapper.args, tools))
       .filter(Boolean);
   }
 
-  const call = parseToolCallText(unwrapped);
+  const call = parseToolCallText(unwrapped, tools);
   return call ? [call] : [];
 }
 
-export function detectToolCall(text) {
-  return detectToolCalls(text)[0] || null;
+export function detectToolCall(text, tools) {
+  return detectToolCalls(text, tools)[0] || null;
 }
 
 function sseChunk(data) {
@@ -1034,8 +1073,8 @@ export async function probeDeepSeekWebToken(apiKey, options = {}) {
   }
 }
 
-function buildOpenAIResponse({ model, content, reasoningContent, usage, prompt }) {
-  const toolCalls = detectToolCalls(content);
+function buildOpenAIResponse({ model, content, reasoningContent, usage, prompt, tools }) {
+  const toolCalls = detectToolCalls(content, tools);
   const message = toolCalls.length > 0
     ? { role: "assistant", content: null, tool_calls: toolCalls }
     : { role: "assistant", content };
@@ -1057,7 +1096,7 @@ function buildOpenAIResponse({ model, content, reasoningContent, usage, prompt }
 function looksLikeMalformedToolIntent(content, body = {}) {
   if (!Array.isArray(body.tools) || body.tools.length === 0) return false;
   const text = String(content || "");
-  if (detectToolCalls(text).length > 0) return false;
+  if (detectToolCalls(text, body.tools).length > 0) return false;
   return /<\/?(?:[\w.-]+:)?(?:tool(?:[-_]call)?|invoke)\b|<(?:[\w.-]+:)?parameter\b|\btool\s*[:=]|"tool"\s*:|\bargs\s*[:=]|\barguments\s*[:=]/i.test(text);
 }
 
@@ -1193,7 +1232,7 @@ export class DeepSeekWebExecutor {
       // never reach here, so their (bad) sibling messages stay off the path.
       this.rememberSession(sessionCacheKey, body, parsed, requestBody.prompt?.length || 0, reused);
 
-      const response = new Response(JSON.stringify(buildOpenAIResponse({ model, prompt: requestBody.prompt, ...parsed })), { status: 200, headers: { "Content-Type": "application/json" } });
+      const response = new Response(JSON.stringify(buildOpenAIResponse({ model, prompt: requestBody.prompt, tools: body.tools, ...parsed })), { status: 200, headers: { "Content-Type": "application/json" } });
       return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: requestBody };
     } catch (err) {
       log?.error?.("DEEPSEEK-WEB", err.message || String(err));
@@ -1325,7 +1364,7 @@ export class DeepSeekWebExecutor {
           // so it is a baseline, not a delta — don't count it toward the budget.
           if (hasDeepSeekOutput(summary)) self.rememberSession(sessionCacheKey, body, summary, requestBody.prompt?.length || 0, reused && !freshFired);
 
-          const toolCalls = detectToolCalls(summary.content);
+          const toolCalls = detectToolCalls(summary.content, body.tools);
           if (toolCalls.length > 0) {
             emit({ tool_calls: toolCalls.map((toolCall, index) => ({ index, id: toolCall.id, type: "function", function: { name: toolCall.function.name, arguments: toolCall.function.arguments } })) });
             emit({}, "tool_calls");

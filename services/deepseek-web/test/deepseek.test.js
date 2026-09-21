@@ -446,6 +446,40 @@ describe("detectToolCall", () => {
     });
   });
 
+  it("remaps a Write call's file_path arg to the client's own schema key (OpenCode uses path)", () => {
+    // Real-world case: OpenCode's "write" tool schema declares `path`, not
+    // `file_path`. DeepSeek's raw-text output always gets parsed into a
+    // file_path/content shape (the Claude Code convention), which then failed
+    // OpenCode's arg validation ("path: Missing key") even though the file
+    // path and content were extracted correctly.
+    const tools = [{ type: "function", function: { name: "write", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } } } } }];
+    const call = detectToolCall('Write({"file_path":"D:\\\\Project\\\\Svelte test\\\\src\\\\App.svelte","content":"hello"})', tools);
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: {
+        name: "write",
+        arguments: JSON.stringify({ path: "D:\\Project\\Svelte test\\src\\App.svelte", content: "hello" }),
+      },
+    });
+  });
+
+  it("leaves file_path alone when the client's own schema declares file_path (Claude Code)", () => {
+    const tools = [{ type: "function", function: { name: "Write", parameters: { type: "object", properties: { file_path: { type: "string" }, content: { type: "string" } } } } }];
+    const call = detectToolCall('Write({"file_path":"a.html","content":"hi"})', tools);
+
+    expect(call).toMatchObject({
+      type: "function",
+      function: { name: "Write", arguments: JSON.stringify({ file_path: "a.html", content: "hi" }) },
+    });
+  });
+
+  it("leaves args unchanged when no matching tool schema is declared", () => {
+    const call = detectToolCall('Write({"file_path":"a.html","content":"hi"})', [{ type: "function", function: { name: "Read", parameters: { type: "object", properties: { path: { type: "string" } } } } }]);
+    expect(call.function.name).toBe("Write");
+    expect(JSON.parse(call.function.arguments)).toEqual({ file_path: "a.html", content: "hi" });
+  });
+
   it("turns clipped flat JSON tool calls into OpenAI tool calls", () => {
     const call = detectToolCall('tool":"Read","file_path":"C:\\\\Users\\\\Administrator\\\\AppData\\\\Roaming\\\\npm\\\\claude-dsw.cmd","limit":2}}');
 
