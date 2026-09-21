@@ -986,6 +986,45 @@ describe("DeepSeekWebExecutor.execute", () => {
     expect(json.choices[0].message.content).toBe("Recovered answer");
   });
 
+  it("recovers by retrying without search when a search-enabled combo keeps cutting generation off incomplete", async () => {
+    // Live report: DeepSeek's own SSE marks response/status "INCOMPLETE" for
+    // the heavier search+deepthink+agentic combo — intermittent, independent
+    // of prompt/session. Same-session retry and a same-mode fresh session
+    // both still fail here; only dropping search (less generation complexity)
+    // recovers it.
+    let completionNo = 0;
+    global.fetch = vi.fn(async (url, opts) => {
+      calls.push({ url, opts, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { chat_session: { id: "session-1" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "challenge-1", salt: "salt-1", signature: "sig-1", difficulty: 3, expire_at: 123456, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/completion")) {
+        completionNo += 1;
+        if (completionNo < 4) return sseResponse("event: ready\ndata: {}\n\nevent: close\ndata: {}\n\n");
+        return sseResponse('data: {"v":{"response":{"fragments":[{"type":"RESPONSE","content":"Recovered without search"}]}}}\n\n');
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    const { response } = await exec.execute({
+      model: "deepseek-web/expert-deepthink-search",
+      body: { messages: [{ role: "user", content: "ok run kan di local ak skrg" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "tok-1" },
+    });
+
+    const json = await response.json();
+    const completionCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/completion"));
+    expect(completionCalls).toHaveLength(4);
+    expect(completionCalls[3].body.search_enabled).toBe(false);
+    expect(response.status).toBe(200);
+    expect(json.choices[0].message.content).toBe("Recovered without search");
+  });
+
   it("returns an error when DeepSeek keeps returning empty completions", async () => {
     global.fetch = vi.fn(async (url, opts) => {
       calls.push({ url, opts, body: opts?.body ? JSON.parse(opts.body) : null });
@@ -1008,8 +1047,13 @@ describe("DeepSeekWebExecutor.execute", () => {
     });
 
     const json = await response.json();
+    // Same-session empty-retry, then a fresh-session retry, then (since this
+    // model's flags have searchEnabled) one more fresh-session retry with
+    // search disabled — 4 completion attempts total before giving up.
     const completionCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/completion"));
-    expect(completionCalls).toHaveLength(2);
+    expect(completionCalls).toHaveLength(4);
+    expect(completionCalls[2].body.search_enabled).toBe(true);
+    expect(completionCalls[3].body.search_enabled).toBe(false);
     expect(response.status).toBe(502);
     expect(json.error.message).toBe("DeepSeek returned empty completion");
   });

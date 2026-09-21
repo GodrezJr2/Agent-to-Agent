@@ -1254,12 +1254,29 @@ export class DeepSeekWebExecutor {
         parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
       }
 
+      let freshFired = false;
       if (!hasDeepSeekOutput(parsed)) {
         requestBody = { ...finalBody, prompt: buildEmptyCompletionRetryPrompt(requestBody.prompt, body) };
         completionResponse = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
         if (!completionResponse.ok) return this.errorResponse(completionResponse.status, "DeepSeek completion failed", headers, requestBody);
         if (!completionResponse.body) return this.errorResponse(502, "DeepSeek returned empty response body", headers, requestBody);
         parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
+
+        // DeepSeek's heavier combos (search + deepthink + agentic) intermittently
+        // cut generation off (response/status "INCOMPLETE" — confirmed via live
+        // debug logs) before producing any content, independent of prompt or
+        // session state. A brand-new session recovers it about half the time;
+        // dropping search (real latency/complexity for the same generation)
+        // recovers most of the rest.
+        if (!hasDeepSeekOutput(parsed)) {
+          const fresh = await this.retryInFreshSession({ model, body, flags, credentials, signal, sessionCacheKey, emitReasoning: () => {} });
+          if (fresh) { parsed = fresh; freshFired = true; }
+        }
+        if (!hasDeepSeekOutput(parsed) && flags.searchEnabled) {
+          const noSearch = await this.retryInFreshSession({ model, body, flags: { ...flags, searchEnabled: false }, credentials, signal, sessionCacheKey, emitReasoning: () => {} });
+          if (noSearch) { parsed = noSearch; freshFired = true; }
+        }
+
         if (!hasDeepSeekOutput(parsed)) {
           // TEMP DEBUG: see the matching comment in buildLiveStream.
           log?.info?.("DEEPSEEK-WEB-DEBUG", `Empty after all retries (non-stream): ${JSON.stringify({ requestMessageId: parsed.requestMessageId, responseMessageId: parsed.responseMessageId, modelType: parsed.modelType, usage: parsed.usage, reasoningLen: (parsed.reasoningContent || "").length, reasoningPreview: (parsed.reasoningContent || "").slice(0, 300), unknownFragments: parsed.unknownFragments, unknownPayloads: parsed.unknownPayloads })}`);
@@ -1278,7 +1295,7 @@ export class DeepSeekWebExecutor {
       // Success: advance the chain. Only now do we record the new messageCount
       // and chain the next turn to THIS response. Failed/retried attempts above
       // never reach here, so their (bad) sibling messages stay off the path.
-      this.rememberSession(sessionCacheKey, body, parsed, requestBody.prompt?.length || 0, reused);
+      this.rememberSession(sessionCacheKey, body, parsed, requestBody.prompt?.length || 0, reused && !freshFired);
 
       const response = new Response(JSON.stringify(buildOpenAIResponse({ model, prompt: requestBody.prompt, tools: body.tools, ...parsed })), { status: 200, headers: { "Content-Type": "application/json" } });
       return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: requestBody };
@@ -1404,6 +1421,16 @@ export class DeepSeekWebExecutor {
             // the turn so the agent loop continues instead of stalling.
             const fresh = await self.retryInFreshSession({ model, body, flags, credentials, signal, sessionCacheKey, emitReasoning });
             if (fresh) { summary = fresh; freshFired = true; }
+          }
+
+          if (!hasDeepSeekOutput(summary) && flags.searchEnabled) {
+            // Heavier combos (search + deepthink + agentic) intermittently cut
+            // generation off (response/status "INCOMPLETE" — confirmed via live
+            // debug logs) before producing any content. Search adds real
+            // latency/complexity to the same generation; dropping it recovers
+            // most of what a same-mode fresh session alone still misses.
+            const noSearch = await self.retryInFreshSession({ model, body, flags: { ...flags, searchEnabled: false }, credentials, signal, sessionCacheKey, emitReasoning });
+            if (noSearch) { summary = noSearch; freshFired = true; }
           }
 
           stopHeartbeat();
