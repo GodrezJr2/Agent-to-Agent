@@ -8,6 +8,7 @@ const CHAT_SESSION_CREATE_URL = `${DEEPSEEK_ORIGIN}/api/v0/chat_session/create`;
 const CREATE_POW_CHALLENGE_URL = `${DEEPSEEK_ORIGIN}/api/v0/chat/create_pow_challenge`;
 const CHAT_COMPLETION_URL = `${DEEPSEEK_ORIGIN}/api/v0/chat/completion`;
 const CHAT_COMPLETION_PATH = "/api/v0/chat/completion";
+const CHAT_CONTINUE_URL = `${DEEPSEEK_ORIGIN}/api/v0/chat/continue`;
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
 
 export const MODEL_FLAGS = {
@@ -548,10 +549,12 @@ async function streamDeepSeekFragments(responseBody, onPayload) {
 }
 
 // Consume one completion stream, streaming THINK fragments out via onReasoning
-// as they grow, and return the same summary shape as parseDeepSeekSse.
-async function consumeCompletionStream(responseBody, onReasoning) {
-  const state = createDeepSeekState();
-  let emittedReasoningLen = 0;
+// as they grow, and return the same summary shape as parseDeepSeekSse. Accepts
+// an existing state so a DeepSeek /chat/continue response (which resumes the
+// SAME message rather than starting a new one) can accumulate onto whatever
+// was already parsed instead of starting over.
+async function consumeCompletionStream(responseBody, onReasoning, state = createDeepSeekState()) {
+  let emittedReasoningLen = state.reasoningContent.length;
   await streamDeepSeekFragments(responseBody, (payload) => {
     applyDeepSeekPayload(payload, state);
     if (state.reasoningContent.length > emittedReasoningLen) {
@@ -562,9 +565,9 @@ async function consumeCompletionStream(responseBody, onReasoning) {
   return summarizeDeepSeekState(state);
 }
 
-export function parseDeepSeekSse(text) {
-  const state = createDeepSeekState();
-
+// Same state-reuse as consumeCompletionStream, for the non-stream (fully
+// buffered) path.
+export function parseDeepSeekSse(text, state = createDeepSeekState()) {
   for (const frame of parseSseFrames(text)) {
     if (!frame.data || frame.data === "[DONE]") continue;
     try {
@@ -1085,6 +1088,29 @@ async function parseJsonResponse(response, label) {
   return json.data.biz_data;
 }
 
+// DeepSeek's own "Continue" button — shown in the web UI whenever generation
+// stops mid-way (response/status "INCOMPLETE") — resumes the SAME message
+// rather than starting a new one, and needs no PoW challenge (confirmed by
+// capturing the real browser request: POST /api/v0/chat/continue with
+// {chat_session_id, message_id, fallback_to_resume:true}). This is the
+// officially-supported recovery path and keeps whatever was already
+// generated, unlike retrying with a new prompt or a brand-new session.
+async function fetchContinuation({ chatSessionId, messageId, credentials, signal }) {
+  if (messageId == null) return null;
+  try {
+    const headers = buildDeepSeekHeaders(credentials, { referer: `${DEEPSEEK_ORIGIN}/a/chat/s/${chatSessionId}` });
+    const response = await fetch(CHAT_CONTINUE_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ chat_session_id: chatSessionId, message_id: messageId, fallback_to_resume: true }),
+      signal,
+    });
+    return response.ok && response.body ? response : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function probeDeepSeekWebToken(apiKey, options = {}) {
   const fetchImpl = options.fetchImpl || fetch;
   const signal = options.signal || (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(8000) : undefined);
@@ -1245,16 +1271,26 @@ export class DeepSeekWebExecutor {
         return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: finalBody };
       }
 
-      let parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
+      let state = createDeepSeekState();
+      let parsed = parseDeepSeekSse(await streamToText(completionResponse.body), state);
       if (looksLikeMalformedToolIntent(parsed.content, body)) {
         requestBody = { ...finalBody, prompt: buildToolRepairPrompt(parsed.content, body) };
         completionResponse = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
         if (!completionResponse.ok) return this.errorResponse(completionResponse.status, "DeepSeek completion failed", headers, requestBody);
         if (!completionResponse.body) return this.errorResponse(502, "DeepSeek returned empty response body", headers, requestBody);
-        parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
+        state = createDeepSeekState();
+        parsed = parseDeepSeekSse(await streamToText(completionResponse.body), state);
       }
 
       let freshFired = false;
+      if (!hasDeepSeekOutput(parsed)) {
+        // Try DeepSeek's own "Continue" mechanism first — it resumes the SAME
+        // message (see fetchContinuation) instead of throwing away whatever
+        // was already generated. Accumulates onto the same `state` since it is
+        // literally more of the same message's fragments, not a new one.
+        const continued = await fetchContinuation({ chatSessionId, messageId: parsed.responseMessageId, credentials, signal });
+        if (continued) parsed = parseDeepSeekSse(await streamToText(continued.body), state);
+      }
       if (!hasDeepSeekOutput(parsed)) {
         requestBody = { ...finalBody, prompt: buildEmptyCompletionRetryPrompt(requestBody.prompt, body) };
         completionResponse = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
@@ -1400,18 +1436,34 @@ export class DeepSeekWebExecutor {
         try {
           let requestBody = finalBody;
           let freshFired = false;
-          let summary = await consumeCompletionStream(firstResponse.body, emitReasoning);
+          let state = createDeepSeekState();
+          let summary = await consumeCompletionStream(firstResponse.body, emitReasoning, state);
 
           if (looksLikeMalformedToolIntent(summary.content, body)) {
             requestBody = { ...finalBody, prompt: buildToolRepairPrompt(summary.content, body) };
             const repair = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
-            if (repair.ok && repair.body) summary = await consumeCompletionStream(repair.body, emitReasoning);
+            if (repair.ok && repair.body) {
+              state = createDeepSeekState();
+              summary = await consumeCompletionStream(repair.body, emitReasoning, state);
+            }
+          }
+
+          if (!hasDeepSeekOutput(summary)) {
+            // Try DeepSeek's own "Continue" mechanism first — resumes the SAME
+            // message (see fetchContinuation) instead of throwing away
+            // whatever was already generated. Accumulates onto the same
+            // `state` since it is more of the same message's fragments.
+            const continued = await fetchContinuation({ chatSessionId: finalBody.chat_session_id, messageId: summary.responseMessageId, credentials, signal });
+            if (continued) summary = await consumeCompletionStream(continued.body, emitReasoning, state);
           }
 
           if (!hasDeepSeekOutput(summary)) {
             requestBody = { ...finalBody, prompt: buildEmptyCompletionRetryPrompt(requestBody.prompt, body) };
             const retry = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers, body: JSON.stringify(requestBody), signal });
-            if (retry.ok && retry.body) summary = await consumeCompletionStream(retry.body, emitReasoning);
+            if (retry.ok && retry.body) {
+              state = createDeepSeekState();
+              summary = await consumeCompletionStream(retry.body, emitReasoning, state);
+            }
           }
 
           if (!hasDeepSeekOutput(summary)) {

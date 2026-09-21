@@ -1025,6 +1025,48 @@ describe("DeepSeekWebExecutor.execute", () => {
     expect(json.choices[0].message.content).toBe("Recovered without search");
   });
 
+  it("recovers an INCOMPLETE response via DeepSeek's own /chat/continue instead of retrying with a new prompt", async () => {
+    // Real browser network capture: when generation stops mid-way, the web UI's
+    // "Continue" button POSTs /api/v0/chat/continue with
+    // {chat_session_id, message_id, fallback_to_resume:true} — no PoW — and
+    // resumes the SAME message. This is the correct recovery path, cheaper
+    // and more reliable than an empty-retry prompt or a brand-new session.
+    global.fetch = vi.fn(async (url, opts) => {
+      calls.push({ url, opts, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { chat_session: { id: "session-1" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "challenge-1", salt: "salt-1", signature: "sig-1", difficulty: 3, expire_at: 123456, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/continue")) {
+        return sseResponse('data: {"v":{"response":{"fragments":[{"type":"RESPONSE","content":"Resumed answer"}]}}}\n\n');
+      }
+      if (url.endsWith("/api/v0/chat/completion")) {
+        return sseResponse('event: ready\ndata: {"request_message_id":1,"response_message_id":2,"model_type":"expert"}\n\ndata: {"p":"response/status","o":"SET","v":"INCOMPLETE"}\n\n');
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    const { response } = await exec.execute({
+      model: "deepseek-web/expert-deepthink",
+      body: { messages: [{ role: "user", content: "hello" }], stream: false },
+      stream: false,
+      credentials: { apiKey: "tok-1" },
+    });
+
+    const json = await response.json();
+    const completionCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/completion"));
+    const continueCalls = calls.filter((call) => call.url.endsWith("/api/v0/chat/continue"));
+    expect(completionCalls).toHaveLength(1);
+    expect(continueCalls).toHaveLength(1);
+    expect(continueCalls[0].body).toEqual({ chat_session_id: "session-1", message_id: 2, fallback_to_resume: true });
+    expect(continueCalls[0].opts.headers["x-ds-pow-response"]).toBeUndefined();
+    expect(response.status).toBe(200);
+    expect(json.choices[0].message.content).toBe("Resumed answer");
+  });
+
   it("returns an error when DeepSeek keeps returning empty completions", async () => {
     global.fetch = vi.fn(async (url, opts) => {
       calls.push({ url, opts, body: opts?.body ? JSON.parse(opts.body) : null });
@@ -1426,6 +1468,43 @@ describe("DeepSeekWebExecutor live streaming", () => {
     expect(completionCalls[1].body.parent_message_id).toBe(50);
     expect(completionCalls[1].body.prompt).toContain("written ok");
     expect(completionCalls[1].body.prompt).not.toContain("Current user request");
+  });
+
+  it("recovers a streamed INCOMPLETE response via /chat/continue before falling back to a new prompt or session", async () => {
+    const local = [];
+    global.fetch = vi.fn(async (url, opts) => {
+      local.push({ url, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith("/api/v0/chat_session/create")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { chat_session: { id: "session-1" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/create_pow_challenge")) {
+        return new Response(JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: { challenge: { algorithm: "DeepSeekHashV1", challenge: "c", salt: "s", signature: "sig", difficulty: 3, expire_at: 1, target_path: "/api/v0/chat/completion" } } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/api/v0/chat/continue")) {
+        return sseResponse('data: {"v":{"response":{"fragments":[{"type":"RESPONSE","content":"Resumed via continue"}]}}}\n\n');
+      }
+      if (url.endsWith("/api/v0/chat/completion")) {
+        return sseResponse('event: ready\ndata: {"request_message_id":1,"response_message_id":2,"model_type":"expert"}\n\ndata: {"p":"response/status","o":"SET","v":"INCOMPLETE"}\n\n');
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const exec = new DeepSeekWebExecutor({ solvePow: async () => 7 });
+    const { response } = await exec.execute({
+      model: "deepseek-web/expert-deepthink",
+      body: { messages: [{ role: "user", content: "hello" }], stream: true },
+      stream: true,
+      credentials: { apiKey: "tok-1", connectionId: "conn-continue" },
+    });
+    const out = await drain(response);
+
+    const completions = local.filter((c) => c.url.endsWith("/api/v0/chat/completion"));
+    const continues = local.filter((c) => c.url.endsWith("/api/v0/chat/continue"));
+    expect(completions).toHaveLength(1); // no empty-retry-with-new-prompt, no fresh session needed
+    expect(continues).toHaveLength(1);
+    expect(continues[0].body).toEqual({ chat_session_id: "session-1", message_id: 2, fallback_to_resume: true });
+    expect(out).toContain("Resumed via continue");
+    expect(out).not.toContain("empty completion");
   });
 
   it("recovers from an empty completion by retrying in a fresh session", async () => {
