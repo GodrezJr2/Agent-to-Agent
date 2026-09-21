@@ -1210,7 +1210,7 @@ export class DeepSeekWebExecutor {
         // still needs the full response text, so the response phase is buffered
         // behind a zero-width reasoning heartbeat; chaining/retries happen
         // inside the stream (see buildLiveStream).
-        const liveStream = this.buildLiveStream({ firstResponse: completionResponse, finalBody, headers, body, model, flags, credentials, signal, sessionCacheKey, reused });
+        const liveStream = this.buildLiveStream({ firstResponse: completionResponse, finalBody, headers, body, model, flags, credentials, signal, sessionCacheKey, reused, log });
         const response = new Response(liveStream, { status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } });
         return { response, url: CHAT_COMPLETION_URL, headers, transformedBody: finalBody };
       }
@@ -1231,6 +1231,14 @@ export class DeepSeekWebExecutor {
         if (!completionResponse.body) return this.errorResponse(502, "DeepSeek returned empty response body", headers, requestBody);
         parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
         if (!hasDeepSeekOutput(parsed)) return this.errorResponse(502, "DeepSeek returned empty completion", headers, requestBody);
+      }
+
+      // TEMP DEBUG (remove once the invoke/parameter namespace-garbling report
+      // is diagnosed): dump the raw content JSON-escaped so control/zero-width
+      // characters show up as \uXXXX instead of being silently swallowed or
+      // mis-rendered by a client's terminal UI.
+      if (Array.isArray(body.tools) && body.tools.length > 0 && detectToolCalls(parsed.content, body.tools).length === 0 && parsed.content) {
+        log?.info?.("DEEPSEEK-WEB-DEBUG", `Unparsed tool-shaped content: ${JSON.stringify(parsed.content.slice(0, 3000))}`);
       }
 
       // Success: advance the chain. Only now do we record the new messageCount
@@ -1309,7 +1317,7 @@ export class DeepSeekWebExecutor {
     }
   }
 
-  buildLiveStream({ firstResponse, finalBody, headers, body, model, flags, credentials, signal, sessionCacheKey, reused }) {
+  buildLiveStream({ firstResponse, finalBody, headers, body, model, flags, credentials, signal, sessionCacheKey, reused, log }) {
     const self = this;
     let heartbeat = null;
     let alive = true;
@@ -1369,6 +1377,12 @@ export class DeepSeekWebExecutor {
           // freshFired => the success landed on a brand-new (full-prompt) session,
           // so it is a baseline, not a delta — don't count it toward the budget.
           if (hasDeepSeekOutput(summary)) self.rememberSession(sessionCacheKey, body, summary, requestBody.prompt?.length || 0, reused && !freshFired);
+
+          // TEMP DEBUG (remove once the invoke/parameter namespace-garbling
+          // report is diagnosed): see the matching comment in execute().
+          if (Array.isArray(body.tools) && body.tools.length > 0 && detectToolCalls(summary.content, body.tools).length === 0 && summary.content) {
+            log?.info?.("DEEPSEEK-WEB-DEBUG", `Unparsed tool-shaped content (stream): ${JSON.stringify(summary.content.slice(0, 3000))}`);
+          }
 
           const toolCalls = detectToolCalls(summary.content, body.tools);
           if (toolCalls.length > 0) {
