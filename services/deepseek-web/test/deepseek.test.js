@@ -246,6 +246,7 @@ describe("parseDeepSeekSse", () => {
       requestMessageId: 1,
       responseMessageId: 2,
       modelType: "expert",
+      unknownFragments: [],
     });
   });
 
@@ -271,6 +272,26 @@ describe("parseDeepSeekSse", () => {
     ].join("\n");
 
     expect(parseDeepSeekSse(sse).content).toBe("pong");
+  });
+
+  it("tracks fragment types other than THINK/RESPONSE/TEMPLATE_RESPONSE instead of silently dropping them", () => {
+    // Live report: DeepSeek reported a large accumulated_token_usage while
+    // content/reasoningContent came back empty — the generated text almost
+    // certainly landed in a fragment type this parser doesn't recognize. This
+    // pins the current (diagnostic) behavior: unrecognized fragments are
+    // tracked in `unknownFragments` rather than vanishing without a trace.
+    const sse = [
+      "data: {\"v\":{\"response\":{\"fragments\":[{\"type\":\"TOOL_CALL\",\"content\":\"{\\\"tool\\\":\\\"Bash\\\"}\"}]}}}",
+      "",
+      "data: {\"p\":\"response\",\"o\":\"BATCH\",\"v\":[{\"p\":\"accumulated_token_usage\",\"v\":42}]}",
+      "",
+    ].join("\n");
+
+    const result = parseDeepSeekSse(sse);
+    expect(result.content).toBe("");
+    expect(result.reasoningContent).toBe("");
+    expect(result.usage.completion_tokens).toBe(42);
+    expect(result.unknownFragments).toEqual([{ type: "TOOL_CALL", len: 15, preview: '{"tool":"Bash"}' }]);
   });
 });
 

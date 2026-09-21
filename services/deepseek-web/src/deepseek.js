@@ -395,10 +395,17 @@ function parseSseFrames(text) {
 function rebuildDeepSeekText(state) {
   state.content = "";
   state.reasoningContent = "";
+  // TEMP DEBUG (remove once the persistent-empty-completion report is
+  // diagnosed): a fragment type other than THINK/RESPONSE/TEMPLATE_RESPONSE is
+  // silently dropped here — never reaches content or reasoningContent — even
+  // though DeepSeek's own `usage.completion_tokens` shows real output was
+  // generated. Track anything unrecognized so it shows up in the debug log.
+  state.unknownFragments = [];
   for (const fragment of state.fragments) {
     if (!fragment) continue;
     if (fragment.type === "THINK") state.reasoningContent += fragment.content || "";
     else if (fragment.type === "RESPONSE" || fragment.type === "TEMPLATE_RESPONSE") state.content += fragment.content || "";
+    else state.unknownFragments.push({ type: fragment.type, len: (fragment.content || "").length, preview: (fragment.content || "").slice(0, 500) });
   }
 }
 
@@ -458,6 +465,7 @@ function createDeepSeekState() {
     currentFragmentType: "RESPONSE",
     currentFragmentIndex: null,
     fragments: [],
+    unknownFragments: [],
   };
 }
 
@@ -469,6 +477,7 @@ function summarizeDeepSeekState(state) {
     requestMessageId: state.requestMessageId,
     responseMessageId: state.responseMessageId,
     modelType: state.modelType,
+    unknownFragments: state.unknownFragments,
   };
 }
 
@@ -1230,7 +1239,11 @@ export class DeepSeekWebExecutor {
         if (!completionResponse.ok) return this.errorResponse(completionResponse.status, "DeepSeek completion failed", headers, requestBody);
         if (!completionResponse.body) return this.errorResponse(502, "DeepSeek returned empty response body", headers, requestBody);
         parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
-        if (!hasDeepSeekOutput(parsed)) return this.errorResponse(502, "DeepSeek returned empty completion", headers, requestBody);
+        if (!hasDeepSeekOutput(parsed)) {
+          // TEMP DEBUG: see the matching comment in buildLiveStream.
+          log?.info?.("DEEPSEEK-WEB-DEBUG", `Empty after all retries (non-stream): ${JSON.stringify({ requestMessageId: parsed.requestMessageId, responseMessageId: parsed.responseMessageId, modelType: parsed.modelType, usage: parsed.usage, reasoningLen: (parsed.reasoningContent || "").length, reasoningPreview: (parsed.reasoningContent || "").slice(0, 300), unknownFragments: parsed.unknownFragments })}`);
+          return this.errorResponse(502, "DeepSeek returned empty completion", headers, requestBody);
+        }
       }
 
       // TEMP DEBUG (remove once the invoke/parameter namespace-garbling report
@@ -1396,7 +1409,7 @@ export class DeepSeekWebExecutor {
             // retry, AND a brand-new session — log what DeepSeek's own message
             // bookkeeping says happened (did it even open a response turn? any
             // reasoning at all?) since the content itself has nothing to show.
-            log?.info?.("DEEPSEEK-WEB-DEBUG", `Empty after all retries: ${JSON.stringify({ freshFired, requestMessageId: summary.requestMessageId, responseMessageId: summary.responseMessageId, modelType: summary.modelType, usage: summary.usage, reasoningLen: (summary.reasoningContent || "").length, reasoningPreview: (summary.reasoningContent || "").slice(0, 300) })}`);
+            log?.info?.("DEEPSEEK-WEB-DEBUG", `Empty after all retries: ${JSON.stringify({ freshFired, requestMessageId: summary.requestMessageId, responseMessageId: summary.responseMessageId, modelType: summary.modelType, usage: summary.usage, reasoningLen: (summary.reasoningContent || "").length, reasoningPreview: (summary.reasoningContent || "").slice(0, 300), unknownFragments: summary.unknownFragments })}`);
             emit({ content: "[DeepSeek Web returned an empty completion]" }, "stop");
           }
           done();
