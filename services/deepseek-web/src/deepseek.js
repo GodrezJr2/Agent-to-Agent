@@ -433,24 +433,43 @@ function applyDeepSeekPayload(payload, state) {
   if (payload.response_message_id) state.responseMessageId = payload.response_message_id;
   if (payload.model_type) state.modelType = payload.model_type;
 
+  // TEMP DEBUG (remove once the persistent-empty-completion report is
+  // diagnosed): a live case reported real completion_tokens generated but
+  // ZERO fragments captured (unknownFragments came back empty too) — meaning
+  // the SSE payload shape itself never matched any branch below, not just an
+  // unrecognized fragment type. Track unmatched payloads so the real shape
+  // DeepSeek used for that turn is visible.
+  let handled = false;
+
   const value = payload.v;
   if (value?.response?.fragments?.length) {
     for (const fragment of value.response.fragments) addDeepSeekFragment(state, fragment);
+    handled = true;
   } else if (typeof value === "string" && !payload.p) {
     updateDeepSeekFragmentContent(state, -1, value, "APPEND");
+    handled = true;
   }
 
   if (payload.p === "response/fragments" && Array.isArray(payload.v)) {
     for (const fragment of payload.v) addDeepSeekFragment(state, fragment);
+    handled = true;
   }
 
   const contentPath = typeof payload.p === "string" ? payload.p.match(/^response\/fragments\/(-?\d+)\/content$/) : null;
-  if (contentPath) updateDeepSeekFragmentContent(state, Number(contentPath[1]), payload.v, payload.o);
+  if (contentPath) {
+    updateDeepSeekFragmentContent(state, Number(contentPath[1]), payload.v, payload.o);
+    handled = true;
+  }
 
   if (payload.p === "response" && payload.o === "BATCH" && Array.isArray(payload.v)) {
     for (const item of payload.v) {
       if (item.p === "accumulated_token_usage") state.usage.completion_tokens = item.v || 0;
     }
+    handled = true;
+  }
+
+  if (!handled && (payload.p != null || payload.v != null) && state.unknownPayloads.length < 20) {
+    state.unknownPayloads.push(JSON.stringify(payload).slice(0, 800));
   }
 }
 
@@ -466,6 +485,7 @@ function createDeepSeekState() {
     currentFragmentIndex: null,
     fragments: [],
     unknownFragments: [],
+    unknownPayloads: [],
   };
 }
 
@@ -474,6 +494,7 @@ function summarizeDeepSeekState(state) {
     content: state.content,
     reasoningContent: state.reasoningContent,
     usage: state.usage,
+    unknownPayloads: state.unknownPayloads,
     requestMessageId: state.requestMessageId,
     responseMessageId: state.responseMessageId,
     modelType: state.modelType,
@@ -1241,7 +1262,7 @@ export class DeepSeekWebExecutor {
         parsed = parseDeepSeekSse(await streamToText(completionResponse.body));
         if (!hasDeepSeekOutput(parsed)) {
           // TEMP DEBUG: see the matching comment in buildLiveStream.
-          log?.info?.("DEEPSEEK-WEB-DEBUG", `Empty after all retries (non-stream): ${JSON.stringify({ requestMessageId: parsed.requestMessageId, responseMessageId: parsed.responseMessageId, modelType: parsed.modelType, usage: parsed.usage, reasoningLen: (parsed.reasoningContent || "").length, reasoningPreview: (parsed.reasoningContent || "").slice(0, 300), unknownFragments: parsed.unknownFragments })}`);
+          log?.info?.("DEEPSEEK-WEB-DEBUG", `Empty after all retries (non-stream): ${JSON.stringify({ requestMessageId: parsed.requestMessageId, responseMessageId: parsed.responseMessageId, modelType: parsed.modelType, usage: parsed.usage, reasoningLen: (parsed.reasoningContent || "").length, reasoningPreview: (parsed.reasoningContent || "").slice(0, 300), unknownFragments: parsed.unknownFragments, unknownPayloads: parsed.unknownPayloads })}`);
           return this.errorResponse(502, "DeepSeek returned empty completion", headers, requestBody);
         }
       }
@@ -1409,7 +1430,7 @@ export class DeepSeekWebExecutor {
             // retry, AND a brand-new session — log what DeepSeek's own message
             // bookkeeping says happened (did it even open a response turn? any
             // reasoning at all?) since the content itself has nothing to show.
-            log?.info?.("DEEPSEEK-WEB-DEBUG", `Empty after all retries: ${JSON.stringify({ freshFired, requestMessageId: summary.requestMessageId, responseMessageId: summary.responseMessageId, modelType: summary.modelType, usage: summary.usage, reasoningLen: (summary.reasoningContent || "").length, reasoningPreview: (summary.reasoningContent || "").slice(0, 300), unknownFragments: summary.unknownFragments })}`);
+            log?.info?.("DEEPSEEK-WEB-DEBUG", `Empty after all retries: ${JSON.stringify({ freshFired, requestMessageId: summary.requestMessageId, responseMessageId: summary.responseMessageId, modelType: summary.modelType, usage: summary.usage, reasoningLen: (summary.reasoningContent || "").length, reasoningPreview: (summary.reasoningContent || "").slice(0, 300), unknownFragments: summary.unknownFragments, unknownPayloads: summary.unknownPayloads })}`);
             emit({ content: "[DeepSeek Web returned an empty completion]" }, "stop");
           }
           done();

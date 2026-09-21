@@ -247,6 +247,7 @@ describe("parseDeepSeekSse", () => {
       responseMessageId: 2,
       modelType: "expert",
       unknownFragments: [],
+      unknownPayloads: [],
     });
   });
 
