@@ -308,8 +308,11 @@ function comboSeatLimits(combo, combosByName, visiting = new Set()) {
     if (name) visiting.delete(name);
   }
 
+  // An operator-set combos.contextWindow replaces the smallest-seat floor. It is
+  // advertised as-is, so it is only as true as the operator makes it.
+  const override = Number(combo?.contextWindow);
   return {
-    contextWindow: Number.isFinite(contextWindow) ? contextWindow : undefined,
+    contextWindow: override > 0 ? override : Number.isFinite(contextWindow) ? contextWindow : undefined,
     maxOutput: Number.isFinite(maxOutput) ? maxOutput : undefined,
   };
 }
@@ -398,7 +401,9 @@ export async function buildModelsList(kindFilter, options = {}) {
       entry.kind = combo.kind;
     } else {
       const comboCaps = aggregateComboCapabilities(combo.models, comboByName, comboSeatCapabilities);
-      if (comboCaps) entry.capabilities = comboCaps;
+      if (comboCaps) {
+        entry.capabilities = combo.contextWindow > 0 ? { ...comboCaps, contextWindow: combo.contextWindow } : comboCaps;
+      }
       // Any seat can serve the request, so the only window a combo can promise is
       // its smallest. Combo entries were the only models on this endpoint that
       // published no limits at all, which leaves a client to guess from the name —

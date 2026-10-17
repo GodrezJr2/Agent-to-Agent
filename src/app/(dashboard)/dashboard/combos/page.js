@@ -571,7 +571,10 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
   // The synced catalog is server-only, so resolving here would fall back to the
   // generic patterns and under-report the limits. getCaps carries the server's
   // answer for /api/models.
-  const comboCaps = aggregateComboCapabilities(combo.models, comboByName, getCaps);
+  const aggregatedCaps = aggregateComboCapabilities(combo.models, comboByName, getCaps);
+  const comboCaps = aggregatedCaps && combo.contextWindow > 0
+    ? { ...aggregatedCaps, contextWindow: combo.contextWindow }
+    : aggregatedCaps;
 
   return (
     <Card padding="sm" className={`group ${selected ? "ring-1 ring-primary/40 bg-primary/[0.03]" : ""}`}>
@@ -1010,6 +1013,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
   // Initialize state with combo values - key prop on parent handles reset on remount
   const [name, setName] = useState(combo?.name || "");
   const [models, setModels] = useState(combo?.models || []);
+  const [contextWindow, setContextWindow] = useState(combo?.contextWindow ? String(combo.contextWindow) : "");
   const [showModelSelect, setShowModelSelect] = useState(false);
   const [saving, setSaving] = useState(false);
   const [nameError, setNameError] = useState("");
@@ -1100,7 +1104,8 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
   const handleSave = async () => {
     if (!validateName(name)) return;
     setSaving(true);
-    await onSave({ name: name.trim(), models });
+    const cw = contextWindow.trim() ? parseInt(contextWindow.trim(), 10) : null;
+    await onSave({ name: name.trim(), models, contextWindow: cw });
     setSaving(false);
   };
 
@@ -1125,6 +1130,21 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
             />
             <p className="text-[10px] text-text-muted mt-0.5">
               Only letters, numbers, -, _ and . allowed
+            </p>
+          </div>
+
+          {/* Context Window */}
+          <div>
+            <Input
+              label="Context Window (tokens)"
+              value={contextWindow}
+              onChange={(e) => setContextWindow(e.target.value.replace(/\D/g, ""))}
+              placeholder="e.g. 1000000"
+              type="text"
+              inputMode="numeric"
+            />
+            <p className="text-[10px] text-text-muted mt-0.5">
+              Advertised to clients via /v1/models instead of the smallest seat's window. Leave blank to derive it from the models.
             </p>
           </div>
 

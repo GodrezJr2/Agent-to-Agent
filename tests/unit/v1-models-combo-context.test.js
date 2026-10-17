@@ -69,6 +69,34 @@ describe("/v1/models combo limits", () => {
     });
   });
 
+  it("advertises an operator-set combo contextWindow instead of the smallest seat", async () => {
+    const models = await modelsWithCombo("opencode-go", "mimo-v2.5", [
+      { name: "override-combo", models: ["ocg/mimo-v2.5"], contextWindow: 1048576 },
+    ]);
+    const combo = models.find((model) => model.id === "override-combo");
+
+    expect(combo).toMatchObject({
+      context_length: 1048576,
+      max_completion_tokens: 16000,
+      capabilities: { contextWindow: 1048576, maxOutput: 16000 },
+    });
+  });
+
+  it("lets a nested combo's override reach the outer combo", async () => {
+    const models = await modelsWithCombo("opencode-go", "mimo-v2.5", [
+      { name: "inner-1m", models: ["ocg/mimo-v2.5"], contextWindow: 1000000 },
+      { name: "outer-1m", models: ["inner-1m"] },
+    ]);
+    expect(models.find((model) => model.id === "outer-1m")).toMatchObject({ context_length: 1000000 });
+  });
+
+  it("falls back to the seat floor when contextWindow is unset", async () => {
+    const models = await modelsWithCombo("opencode-go", "mimo-v2.5", [
+      { name: "no-override", models: ["ocg/mimo-v2.5"], contextWindow: null },
+    ]);
+    expect(models.find((model) => model.id === "no-override")).toMatchObject({ context_length: 180000 });
+  });
+
   it("publishes Devin CLI's 200k limit for a dv combo seat", async () => {
     const models = await modelsWithCombo("devin-cli", "gpt-5.5-high", [
       { name: "devin-combo", models: ["dv/gpt-5.5-high"] },
