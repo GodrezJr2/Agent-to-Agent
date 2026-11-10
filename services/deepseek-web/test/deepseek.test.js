@@ -1625,3 +1625,29 @@ describe("DSML bare closers (seen live 10 Nov 2026)", () => {
     expect(normalizeDsmlMarkup(plain)).toBe(plain);
   });
 });
+
+describe("agent-harness turn shape (seen live 11 Nov 2026)", () => {
+  it("uses every trailing user message as the request after a compaction", () => {
+    const body = { messages: [
+      { role: "system", content: "sys" },
+      { role: "user", content: "build the city" },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "This is an automatically generated checkpoint condensing an earlier span. Task: Voxel Pagoda City, sections 1-9 done." },
+      { role: "user", content: "Current runtime context. cwd D:/x" },
+      { role: "user", content: "<system-reminder>The available skill catalog changed.</system-reminder>" },
+    ] };
+    const prompt = buildDeepSeekPrompt(body);
+    const req = prompt.split("Current user request:\n")[1];
+    expect(req).toContain("Voxel Pagoda City");
+    expect(req).toContain("skill catalog changed");
+    expect(req).toContain("continue the work");
+  });
+
+  it("parses a stringified array argument when the schema wants an array", () => {
+    const tools = [{ type: "function", function: { name: "ask_user_question", parameters: { type: "object", properties: { questions: { type: "array" } }, required: ["questions"] } } }];
+    const P = "｜｜DSML｜｜";
+    const text = `<${P} invoke name="ask_user_question">\n<${P} parameter name="questions" string="true">[{"question":"What next?"}]</${P} parameter>\n</${P} invoke>`;
+    const [call] = detectToolCalls(text, tools);
+    expect(JSON.parse(call.function.arguments)).toEqual({ questions: [{ question: "What next?" }] });
+  });
+});

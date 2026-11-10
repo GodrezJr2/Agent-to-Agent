@@ -293,6 +293,7 @@ export function buildDeepSeekPrompt(body = {}, { agentic = false } = {}) {
   const instructionParts = [];
   const historyParts = [];
   let currentUser = "";
+  let trailingUsers = [];
 
   for (const message of messages) {
     const role = message.role === "developer" ? "system" : message.role;
@@ -314,11 +315,14 @@ export function buildDeepSeekPrompt(body = {}, { agentic = false } = {}) {
     const text = contentToText(message.content).trim();
     if (!text) continue;
 
+    if (role !== "user" && role !== "system") trailingUsers = [];
     if (role === "system") {
       instructionParts.push(text);
     } else if (role === "user") {
       currentUser = text;
+      trailingUsers.push(text);
       historyParts.push(`user: ${text}`);
+      continue;
     } else if (role === "assistant") {
       historyParts.push(`assistant: ${text}`);
     } else if (role === "tool") {
@@ -327,8 +331,19 @@ export function buildDeepSeekPrompt(body = {}, { agentic = false } = {}) {
     }
   }
 
-  if (currentUser && historyParts.length > 0 && historyParts[historyParts.length - 1] === `user: ${currentUser}`) {
+  // Agent harnesses append several user messages per turn (after a context
+  // compaction: checkpoint summary, workspace reminder, runtime context, skill
+  // catalog). Taking only the LAST one as the request made the model see just
+  // the skill catalog, decide there was no task, and stop (seen live 11 Nov
+  // 2026). Treat the whole trailing run of user messages as the request.
+  if (trailingUsers.length > 1) {
+    for (let i = 0; i < trailingUsers.length && historyParts[historyParts.length - 1] === `user: ${trailingUsers[trailingUsers.length - 1 - i]}`; i++) historyParts.pop();
+    currentUser = trailingUsers.join("\n\n");
+  } else if (currentUser && historyParts.length > 0 && historyParts[historyParts.length - 1] === `user: ${currentUser}`) {
     historyParts.pop();
+  }
+  if (/automatically generated checkpoint|conversation (was|has been) (compacted|summarized)/i.test(currentUser)) {
+    currentUser += "\n\n(The conversation was compacted mid-task. The checkpoint above holds the task and its progress: continue the work from where it left off. Do not ask what to do.)";
   }
 
   const sections = [];
@@ -953,6 +968,16 @@ function normalizeToolCall(toolName, args, tools) {
     const group = ARG_SYNONYM_GROUPS.find((g) => g.includes(key));
     const target = group?.find((candidate) => candidate !== key && propNames.includes(candidate));
     normalized[target || key] = value;
+  }
+  // DSML parameters arrive as text, so an array/object argument often comes
+  // through as a JSON string ("questions" must be an array, seen live).
+  for (const [key, value] of Object.entries(normalized)) {
+    const type = properties[key]?.type;
+    if (typeof value !== "string" || (type !== "array" && type !== "object")) continue;
+    try {
+      const parsed = JSON.parse(value);
+      if (type === "array" ? Array.isArray(parsed) : (parsed && typeof parsed === "object" && !Array.isArray(parsed))) normalized[key] = parsed;
+    } catch { /* leave as-is */ }
   }
   return { name: fn.name || toolName, args: normalized };
 }
