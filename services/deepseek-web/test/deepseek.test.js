@@ -1595,3 +1595,33 @@ describe("extractUpstreamError", () => {
     expect(extractUpstreamError("<html>502 Bad Gateway</html>")).toBe("<html>502 Bad Gateway</html>");
   });
 });
+
+describe("DSML bare closers (seen live 10 Nov 2026)", () => {
+  const P = "｜｜DSML｜｜";
+  const tools = [
+    { type: "function", function: { name: "read", parameters: { type: "object", properties: { file_path: { type: "string" }, offset: { type: "number" }, limit: { type: "number" } }, required: ["file_path"] } } },
+    { type: "function", function: { name: "pwsh", parameters: { type: "object", properties: { command: { type: "string" }, description: { type: "string" } }, required: ["command", "description"] } } },
+  ];
+  const args = (text) => detectToolCalls(text, tools).map((c) => [c.function.name, JSON.parse(c.function.arguments)]);
+
+  it("closes a parameter ended by a bare </｜｜DSML｜｜> instead of swallowing the next one", () => {
+    const text = `<${P} invoke name="read">\n<${P} parameter name="file_path" string="true">` + String.raw`D:\Project\Motion Design Test\index.html` + `</${P}>\n<parameter name="limit">90</${P} parameter>\n<${P} parameter name="offset" string="false">635</${P} parameter>\n</${P} invoke>`;
+    expect(args(text)).toEqual([["read", { file_path: String.raw`D:\Project\Motion Design Test\index.html`, limit: 90, offset: 635 }]]);
+  });
+
+  it("keeps the second parameter when the first used a bare closer", () => {
+    const text = `<${P} invoke name="pwsh">\n<${P} parameter name="command" string="true">(Get-Content index.html).Count</${P}>\n<parameter name="description">Count lines</parameter>\n</${P} invoke>`;
+    expect(args(text)).toEqual([["pwsh", { command: "(Get-Content index.html).Count", description: "Count lines" }]]);
+  });
+
+  it("does not nest a parameter opened before the previous one closed", () => {
+    const text = `<${P} invoke name="read">\n<${P} parameter name="file_path" string="true"><${P} parameter name="offset" string="false">635</${P} parameter>\n</${P} invoke>`;
+    expect(args(text)).toEqual([["read", { file_path: "", offset: 635 }]]);
+  });
+
+  it("leaves pipe-free text alone", async () => {
+    const { normalizeDsmlMarkup } = await import("../src/deepseek.js");
+    const plain = '<tool_call name="Read"><parameter name="file_path">a</parameter></tool_call>';
+    expect(normalizeDsmlMarkup(plain)).toBe(plain);
+  });
+});

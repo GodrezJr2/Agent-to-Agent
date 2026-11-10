@@ -970,8 +970,61 @@ function buildToolCall(toolName, parsed, tools) {
   };
 }
 
+// DeepSeek's native tool-call markup leaks through as fullwidth-pipe tags
+// ("<｜｜DSML｜｜ parameter name=...>"), and it often closes a parameter with a
+// BARE closer that names no tag ("</｜｜DSML｜｜>"), or opens the next
+// <parameter> before closing the previous one. NS_PARAMETER_TAG then runs to
+// the next real closer and swallows the following parameter into the value
+// (seen live 10 Nov 2026: file_path = 'index.html</｜｜DSML｜｜>\n<parameter
+// name="limit">90'). Rewrite that markup into plain, balanced tags first.
+// Only runs when the pipe form is present, so normal content is untouched.
+const DSML_PIPE_RE = /[|｜]{1,2}[^\s<>|｜]{0,32}[|｜]{1,2}/;
+const DSML_PREFIXED_TAG_RE = /<(\/?)[|｜]{1,2}[^\s<>|｜]{0,32}[|｜]{1,2}\s*(?=[A-Za-z_])/g;
+const DSML_BARE_CLOSER_RE = /<\/[|｜]{1,2}[^\s<>|｜]{0,32}[|｜]{1,2}\s*>/g;
+const DSML_STRUCT_TAG_RE = /<(\/?)(parameter|invoke|function_calls|calls|tool_call|tool)\b[^>]*>|\u0000BARE\u0000/g;
+
+export function normalizeDsmlMarkup(text) {
+  const input = String(text || "");
+  if (!DSML_PIPE_RE.test(input)) return input;
+  const flat = input
+    .replace(DSML_BARE_CLOSER_RE, "\u0000BARE\u0000")
+    .replace(DSML_PREFIXED_TAG_RE, "<$1");
+  const stack = [];
+  let out = "";
+  let last = 0;
+  for (const m of flat.matchAll(DSML_STRUCT_TAG_RE)) {
+    out += flat.slice(last, m.index);
+    last = m.index + m[0].length;
+    if (m[0] === "\u0000BARE\u0000") {
+      const open = stack.pop();
+      out += open ? `</${open}>` : "";
+      continue;
+    }
+    const [, closing, name] = m;
+    if (closing) {
+      // Close everything opened inside this element, then the element itself.
+      const at = stack.lastIndexOf(name);
+      if (at === -1) { out += m[0]; continue; }
+      while (stack.length > at + 1) out += `</${stack.pop()}>`;
+      stack.pop();
+      out += m[0];
+      continue;
+    }
+    // A new <parameter> while one is still open: the previous one ended.
+    if (name === "parameter" && stack[stack.length - 1] === "parameter") out += `</${stack.pop()}>`;
+    stack.push(name);
+    out += m[0];
+  }
+  out += flat.slice(last);
+  while (stack.length) {
+    const open = stack.pop();
+    if (open === "parameter" || open === "invoke") out += `</${open}>`;
+  }
+  return out.replace(/\u0000BARE\u0000/g, "");
+}
+
 function unwrapToolText(text) {
-  return String(text || "")
+  return normalizeDsmlMarkup(String(text || ""))
     .trim()
     .replace(/^\s*```(?:json)?\s*/i, "")
     .replace(/^\s*json\s+/i, "")
