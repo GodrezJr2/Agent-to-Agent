@@ -4,6 +4,7 @@ import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbe
 import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from "open-sse/config/providers.js";
 import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-to-commandcode.js";
+import { buildCommandCodeHeaders } from "open-sse/shared/commandCodeHeaders.js";
 import { resolveQoderCredentials, resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
 import {
@@ -398,6 +399,7 @@ export async function POST(request) {
         case "assemblyai":
         case "nanobanana":
         case "chutes":
+        case "runcrate":
         case "xiaomi-mimo":
         case "xiaomi-tokenplan":
         case "nvidia": {
@@ -425,7 +427,7 @@ export async function POST(request) {
         }
 
         case "opencode-go": {
-          const res = await fetch("https://opencode.ai/zen/go/v1/chat/completions", {
+          const res = await fetch("https://opencode.ai/inference/go/openai/v1/chat/completions", {
             method: "POST",
             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
             body: JSON.stringify({
@@ -449,12 +451,7 @@ export async function POST(request) {
           }, false);
           const res = await fetch(cfg.baseUrl, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(cfg.headers || {}),
-              "x-session-id": crypto.randomUUID(),
-              "Authorization": `Bearer ${apiKey}`,
-            },
+            headers: buildCommandCodeHeaders({ apiKey, sessionId: payload.threadId }),
             body: JSON.stringify(payload),
           });
           isValid = res.status !== 401 && res.status !== 403;
