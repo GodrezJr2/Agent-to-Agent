@@ -41,6 +41,9 @@ const SESSION_ROTATE_BYTES = 80000;
 // client's idle/TTFT timeout never fires. Empty OpenAI deltas are dropped by the
 // OpenAI->Claude translator, so the heartbeat must be real reasoning text.
 const HEARTBEAT_MS = 5000;
+// Waits between retries when DeepSeek refuses a turn outright (throttle or
+// biz error). Override with DEEPSEEK_WEB_BACKOFF_MS="5000,10000,20000".
+const BACKOFF_SCHEDULE_MS = (process.env.DEEPSEEK_WEB_BACKOFF_MS || "5000,10000,20000").split(",").map(Number).filter((n) => n > 0);
 const HEARTBEAT_TOKEN = String.fromCharCode(0x200b);
 
 // Tool-result size limits. The delta (the turn a result comes back) is sent to
@@ -487,6 +490,7 @@ function createDeepSeekState() {
     fragments: [],
     unknownFragments: [],
     unknownPayloads: [],
+    rawHead: "",
   };
 }
 
@@ -500,7 +504,33 @@ function summarizeDeepSeekState(state) {
     responseMessageId: state.responseMessageId,
     modelType: state.modelType,
     unknownFragments: state.unknownFragments,
+    rawHead: state.rawHead,
+    upstreamError: extractUpstreamError(state.rawHead),
   };
+}
+
+// DeepSeek answers some failures (rate limit, session/biz errors, auth) with a
+// plain JSON body instead of SSE frames. frameToPayload only reads "data:"
+// lines, so those bodies used to vanish and the turn looked like an empty
+// completion. Pull a readable reason out of whatever non-SSE text came back
+// so the backoff retry can run and the client sees the real cause.
+export function extractUpstreamError(rawHead) {
+  const text = String(rawHead || "").trim();
+  if (!text) return null;
+  let obj = null;
+  try { obj = JSON.parse(text); } catch {
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) { try { obj = JSON.parse(m[0]); } catch { } }
+  }
+  if (obj && typeof obj === "object") {
+    const data = obj.data && typeof obj.data === "object" ? obj.data : {};
+    const failed = (obj.code != null && obj.code !== 0) || (data.biz_code != null && data.biz_code !== 0) || !!obj.error;
+    if (!failed) return null;
+    const msg = data.biz_msg || obj.msg || obj.message || obj.error?.message || (typeof obj.error === "string" ? obj.error : "") || "DeepSeek error";
+    const code = data.biz_code != null && data.biz_code !== 0 ? data.biz_code : (obj.code ?? obj.error?.code);
+    return `${msg}${code != null ? ` (code ${code})` : ""}`.slice(0, 300);
+  }
+  return text.slice(0, 300);
 }
 
 function frameToPayload(frameText) {
@@ -522,7 +552,7 @@ function frameToPayload(frameText) {
 // Read a DeepSeek completion stream incrementally, applying each SSE frame to
 // `state` as it arrives and invoking onPayload after each. Lets the caller emit
 // reasoning deltas live (keepalive) instead of buffering the whole response.
-async function streamDeepSeekFragments(responseBody, onPayload) {
+async function streamDeepSeekFragments(responseBody, onPayload, onRaw) {
   const reader = responseBody.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -530,7 +560,9 @@ async function streamDeepSeekFragments(responseBody, onPayload) {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      const chunk = decoder.decode(value, { stream: true });
+      onRaw?.(chunk);
+      buffer += chunk;
       const parts = buffer.split(/\r?\n\r?\n/);
       buffer = parts.pop() ?? "";
       for (const part of parts) {
@@ -555,19 +587,29 @@ async function streamDeepSeekFragments(responseBody, onPayload) {
 // was already parsed instead of starting over.
 async function consumeCompletionStream(responseBody, onReasoning, state = createDeepSeekState()) {
   let emittedReasoningLen = state.reasoningContent.length;
+  let raw = "";
   await streamDeepSeekFragments(responseBody, (payload) => {
     applyDeepSeekPayload(payload, state);
     if (state.reasoningContent.length > emittedReasoningLen) {
       onReasoning?.(state.reasoningContent.slice(emittedReasoningLen));
       emittedReasoningLen = state.reasoningContent.length;
     }
-  });
+  }, (chunk) => { if (raw.length < 4000) raw += chunk; });
+  // Keep only non-SSE text: a normal stream is all "data:"/"event:" lines.
+  const nonSse = nonSseText(raw);
+  if (nonSse) state.rawHead = (state.rawHead + nonSse).slice(0, 2000);
   return summarizeDeepSeekState(state);
 }
 
 // Same state-reuse as consumeCompletionStream, for the non-stream (fully
 // buffered) path.
+export function nonSseText(raw) {
+  return String(raw || "").split(/\r?\n/).filter((l) => l.trim() && !/^(data|event|id|retry):/.test(l.trim())).join("\n");
+}
+
 export function parseDeepSeekSse(text, state = createDeepSeekState()) {
+  const nonSse = nonSseText(text);
+  if (nonSse) state.rawHead = (state.rawHead + nonSse).slice(0, 2000);
   for (const frame of parseSseFrames(text)) {
     if (!frame.data || frame.data === "[DONE]") continue;
     try {
@@ -1493,6 +1535,32 @@ export class DeepSeekWebExecutor {
             if (noSearch) { summary = noSearch; freshFired = true; }
           }
 
+          // Upstream refused every attempt within ~1s (seen live 10 Nov 2026:
+          // all retries done in 1s, responseMessageId null). That is a throttle
+          // or error, not a saturated context, so wait and retry with a FRESH
+          // PoW header (a challenge answer is single-use) before giving up.
+          for (const waitMs of BACKOFF_SCHEDULE_MS) {
+            if (hasDeepSeekOutput(summary) || signal?.aborted) break;
+            log?.info?.("DEEPSEEK-WEB", `Empty/refused turn (${summary.upstreamError || "no output"}); backing off ${waitMs}ms`);
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
+            try {
+              const freshHeaders = await self.getPowHeaders(credentials, requestBody.chat_session_id, signal);
+              const again = await fetch(CHAT_COMPLETION_URL, { method: "POST", headers: freshHeaders, body: JSON.stringify(requestBody), signal });
+              if (again.body) {
+                state = createDeepSeekState();
+                const next = await consumeCompletionStream(again.body, emitReasoning, state);
+                if (!again.ok && !next.upstreamError) next.upstreamError = `HTTP ${again.status}`;
+                summary = next;
+              }
+            } catch (err) {
+              summary = { ...summary, upstreamError: err?.message || String(err) };
+            }
+            if (!hasDeepSeekOutput(summary)) {
+              const fresh = await self.retryInFreshSession({ model, body, flags, credentials, signal, sessionCacheKey, emitReasoning });
+              if (fresh) { summary = fresh; freshFired = true; }
+            }
+          }
+
           stopHeartbeat();
 
           // freshFired => the success landed on a brand-new (full-prompt) session,
@@ -1517,8 +1585,9 @@ export class DeepSeekWebExecutor {
             // retry, AND a brand-new session — log what DeepSeek's own message
             // bookkeeping says happened (did it even open a response turn? any
             // reasoning at all?) since the content itself has nothing to show.
-            log?.info?.("DEEPSEEK-WEB-DEBUG", `Empty after all retries: ${JSON.stringify({ freshFired, requestMessageId: summary.requestMessageId, responseMessageId: summary.responseMessageId, modelType: summary.modelType, usage: summary.usage, reasoningLen: (summary.reasoningContent || "").length, reasoningPreview: (summary.reasoningContent || "").slice(0, 300), unknownFragments: summary.unknownFragments, unknownPayloads: summary.unknownPayloads })}`);
-            emit({ content: "[DeepSeek Web returned an empty completion]" }, "stop");
+            log?.info?.("DEEPSEEK-WEB-DEBUG", `Empty after all retries: ${JSON.stringify({ freshFired, upstreamError: summary.upstreamError, rawHead: (summary.rawHead || "").slice(0, 500), requestMessageId: summary.requestMessageId, responseMessageId: summary.responseMessageId, modelType: summary.modelType, usage: summary.usage, reasoningLen: (summary.reasoningContent || "").length, reasoningPreview: (summary.reasoningContent || "").slice(0, 300), unknownFragments: summary.unknownFragments, unknownPayloads: summary.unknownPayloads })}`);
+            const reason = summary.upstreamError ? `: ${summary.upstreamError}` : "";
+            emit({ content: `[DeepSeek Web returned no output after retries${reason}. Resend the last message to continue.]` }, "stop");
           }
           done();
         } catch (err) {

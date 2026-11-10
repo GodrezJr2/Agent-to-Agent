@@ -248,7 +248,15 @@ describe("parseDeepSeekSse", () => {
       modelType: "expert",
       unknownFragments: [],
       unknownPayloads: [],
+      rawHead: "",
+      upstreamError: null,
     });
+  });
+
+  it("surfaces a plain-JSON DeepSeek error body instead of an empty result", () => {
+    const parsed = parseDeepSeekSse('{"code":0,"msg":"","data":{"biz_code":3,"biz_msg":"Messages too frequent, try later","biz_data":null}}');
+    expect(parsed.content).toBe("");
+    expect(parsed.upstreamError).toBe("Messages too frequent, try later (code 3)");
   });
 
   it("applies indexed RESPONSE fragment content before append chunks", () => {
@@ -1569,5 +1577,21 @@ describe("DeepSeekWebExecutor live streaming", () => {
     expect(completions[2].body.parent_message_id).toBeNull(); // fresh session = no parent
     expect(out).toContain('"name":"Read"'); // recovered tool call
     expect(out).not.toContain("empty completion");
+  });
+});
+
+describe("extractUpstreamError", () => {
+  it("reads a top-level error code", async () => {
+    const { extractUpstreamError } = await import("../src/deepseek.js");
+    expect(extractUpstreamError('{"code":40003,"msg":"INVALID_TOKEN","data":null}')).toBe("INVALID_TOKEN (code 40003)");
+  });
+  it("returns null for no text and for a success body", async () => {
+    const { extractUpstreamError } = await import("../src/deepseek.js");
+    expect(extractUpstreamError("")).toBeNull();
+    expect(extractUpstreamError('{"code":0,"data":{"biz_code":0}}')).toBeNull();
+  });
+  it("keeps raw text when it is not JSON", async () => {
+    const { extractUpstreamError } = await import("../src/deepseek.js");
+    expect(extractUpstreamError("<html>502 Bad Gateway</html>")).toBe("<html>502 Bad Gateway</html>");
   });
 });
